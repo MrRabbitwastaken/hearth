@@ -1,10 +1,11 @@
-# Optional: if this folder is pushed to GitHub, every push builds Hearth-Setup.exe automatically.
-# Download it from the run's "Artifacts" section.
+# Every push to main builds Hearth-Setup.exe on Windows and publishes it on the Releases page.
 name: Build Hearth installer
 on:
   push:
     branches: [main]
   workflow_dispatch: {}
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: windows-latest
@@ -15,7 +16,21 @@ jobs:
           node-version: 22
       - run: npm install --no-audit --no-fund
       - run: npm run dist
+      - name: Read version
+        id: ver
+        shell: bash
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: Hearth-Setup
           path: dist/Hearth-Setup-*.exe
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: Hearth ${{ steps.ver.outputs.version }}
+          body: |
+            Download **Hearth-Setup-${{ steps.ver.outputs.version }}.exe** below and double-click it to install.
+            Silent install (e.g. NinjaOne): `Hearth-Setup-${{ steps.ver.outputs.version }}.exe /S` (add `/allusers` for every user).
+          files: dist/Hearth-Setup-*.exe
+          make_latest: true
