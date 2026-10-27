@@ -1,0 +1,58 @@
+{
+  "name": "hearth",
+  "productName": "Hearth",
+  "version": "1.1.0",
+  "description": "A warm little work assistant: daily tasks, projects, calendar, notebooks, screen breaks and focus time.",
+  "main": "src/main.js",
+  "author": "Jake",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "package": "electron-packager . Hearth --platform=win32 --arch=x64 --out=dist --overwrite --asar --icon=build/icon.ico --ignore=\"^/dist\" --ignore=\"^/\\.tools\" --ignore=\"^/\\.github\" --ignore=\"^/build\" --ignore=\"\\.bat$\" --app-copyright=\"Hearth\" --win32metadata.ProductName=Hearth --win32metadata.FileDescription=Hearth --win32metadata.CompanyName=Hearth",
+    "dist": "npm run package && electron-builder --win nsis --x64 --prepackaged dist/Hearth-win32-x64 --publish never"
+  },
+  "build": {
+    "appId": "com.hearth.workassistant",
+    "productName": "Hearth",
+    "copyright": "Hearth",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false,
+      "artifactName": "Hearth-Setup-${version}.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Hearth",
+      "uninstallDisplayName": "Hearth",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "uninstallerSidebar": "build/installerSidebar.bmp",
+      "installerHeader": "build/installerHeader.bmp",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
+    }
+  },
+  "dependencies": {
+    "@fontsource-variable/caveat": "^5.1.0",
+    "@fontsource-variable/fraunces": "^5.1.0",
+    "@fontsource-variable/nunito": "^5.1.0",
+    "@fontsource/jetbrains-mono": "^5.1.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "^18.3.6",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  }
+}
