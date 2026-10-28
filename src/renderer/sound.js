@@ -47,7 +47,13 @@ function applyVolumes() {
   fxBus.gain.value = s.sounds === false ? 0 : (s.volume ?? .6) * .9;
   if (amb.name && !amb.stream) ambBus.gain.setTargetAtTime((s.ambientVolume ?? .5) * .9, ctx.currentTime, .3);
 }
-function applyStreamVolume() { if (amb.stream) window.hearth.streamVolume(streamVol()); }
+let svTimer = null, svLast = 0;
+function applyStreamVolume() {
+  if (!amb.stream) return;
+  const send = () => { svLast = Date.now(); svTimer = null; window.hearth.streamVolume(streamVol()); };
+  clearTimeout(svTimer);
+  if (Date.now() - svLast > 60) send(); else svTimer = setTimeout(send, 60);
+}
 
 // ------------------------------------------------------------------ helpers
 function env(g, t, a, peak, d) {
@@ -354,7 +360,8 @@ function sourceFor(name) {
   if (mode === 'stream' && canStream()) return { kind: 'stream', url: src.url || DEFAULT_LINKS[name] };
   return { kind: 'synth' };
 }
-const streamVol = () => { const v = settings().ambientVolume ?? .5; return Math.max(0, Math.min(1, v * .75)); };
+// ears hear loudness on a curve, so a straight line made the bottom half of the slider barely quieter
+const streamVol = () => { const v = Math.max(0, Math.min(1, settings().ambientVolume ?? .5)); return +(Math.pow(v, 2) * .85).toFixed(4); };
 if (window.hearth && window.hearth.onStreamState) {
   window.hearth.onStreamState((st) => {
     if (!amb.stream || st.url !== amb.streamUrl) return;

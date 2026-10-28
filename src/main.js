@@ -471,9 +471,27 @@ function embedUrl(raw) {
   if (list) return `https://www.youtube-nocookie.com/embed/videoseries?list=${encodeURIComponent(list)}&${q}&loop=1`;
   return u.href; // a direct audio/stream link
 }
-let player = null, playerUrl = null, playerVol = .4, fadeTimer = null, pollTimer = null;
-const PLAYER_JS = (v) => `(() => { const m = [...document.querySelectorAll('video,audio')];
-  m.forEach(x => { x.loop = true; x.muted = false; x.volume = ${Math.max(0, Math.min(1, v)).toFixed(3)}; if (x.paused) x.play().catch(() => {}); });
+let player = null, playerUrl = null, playerVol = .4, appliedVol = 0, fadeTimer = null, pollTimer = null;
+// Sets the level inside the hidden player page and installs a guard there: YouTube's own player puts the
+// volume back to its saved level whenever the video loops, re-buffers or changes quality, which made the
+// sound jump loud then quiet. The guard snaps any change straight back to Hearth's level (window.__hv).
+const PLAYER_JS = (v) => `(() => { const v = ${Math.max(0, Math.min(1, v)).toFixed(4)};
+  window.__hv = v;
+  if (!window.__hguard) {
+    window.__hguard = true;
+    const near = (x) => Math.abs(x.volume - window.__hv) < 0.004;
+    window.__hfix = (x) => {
+      if (x.__hg) return; x.__hg = true;
+      x.addEventListener('volumechange', () => { if (x.muted) x.muted = false; if (!near(x)) x.volume = window.__hv; });
+      ['playing', 'loadeddata', 'seeked', 'ratechange'].forEach(ev => x.addEventListener(ev, () => { if (!near(x)) x.volume = window.__hv; }));
+    };
+    new MutationObserver(() => document.querySelectorAll('video,audio').forEach(window.__hfix)).observe(document.documentElement, { childList: true, subtree: true });
+    setInterval(() => document.querySelectorAll('video,audio').forEach(x => { window.__hfix(x); if (!near(x)) x.volume = window.__hv; }), 300);
+    try { localStorage.setItem('yt-player-volume', JSON.stringify({ data: JSON.stringify({ volume: 100, muted: false }), expiration: Date.now() + 864e8, creation: Date.now() })); } catch (e) {}
+  }
+  try { const mp = document.getElementById('movie_player'); if (mp && mp.setVolume && !window.__hapi) { window.__hapi = true; mp.unMute && mp.unMute(); mp.setVolume(100); } } catch (e) {}
+  const m = [...document.querySelectorAll('video,audio')];
+  m.forEach(x => { window.__hfix(x); x.loop = true; x.muted = false; x.volume = v; if (x.paused) x.play().catch(() => {}); });
   const err = document.querySelector('.ytp-error, .ytp-error-content');
   return { media: m.length, playing: m.some(x => !x.paused && x.readyState > 2), error: !!(err && err.offsetParent !== null) }; })()`;
 function streamSend(state) { broadcast('sound:stream', { state, url: playerUrl }); }
@@ -484,19 +502,20 @@ function killPlayer() {
 }
 function setPlayerVolume(v, ms = 0) {
   if (!player || player.isDestroyed()) return;
-  clearInterval(fadeTimer);
-  if (!ms) { player.webContents.executeJavaScript(PLAYER_JS(v)).catch(() => {}); return; }
-  const from = playerVol, steps = Math.max(1, Math.round(ms / 80)); let i = 0;
+  clearInterval(fadeTimer); fadeTimer = null;
+  const apply = (x) => { appliedVol = x; if (player && !player.isDestroyed()) player.webContents.executeJavaScript(PLAYER_JS(x)).catch(() => {}); };
+  if (!ms) { apply(v); return; }
+  // fade from where it actually is now (not from the new target), so slider moves glide rather than jump
+  const from = appliedVol, steps = Math.max(1, Math.round(ms / 50)); let i = 0;
   fadeTimer = setInterval(() => {
-    i++; const cur = from + (v - from) * (i / steps);
-    if (player && !player.isDestroyed()) player.webContents.executeJavaScript(PLAYER_JS(cur)).catch(() => {});
-    if (i >= steps) clearInterval(fadeTimer);
-  }, 80);
+    i++; apply(from + (v - from) * (i / steps));
+    if (i >= steps) { clearInterval(fadeTimer); fadeTimer = null; }
+  }, 50);
 }
 function streamPlay(url, vol) {
   killPlayer();
   const target = embedUrl(url);
-  playerUrl = url; playerVol = vol;
+  playerUrl = url; playerVol = vol; appliedVol = 0;
   if (!target) { streamSend('error'); return false; }
   player = new BrowserWindow({
     show: false, width: 640, height: 360, skipTaskbar: true, focusable: false,
@@ -513,16 +532,16 @@ function streamPlay(url, vol) {
     if (!player || player.isDestroyed()) return clearInterval(pollTimer);
     tries++;
     let r = null;
-    try { r = await player.webContents.executeJavaScript(PLAYER_JS(started ? playerVol : 0.001)); } catch (_) {}
+    try { r = await player.webContents.executeJavaScript(PLAYER_JS(0.001)); } catch (_) {}
     if (r && r.error) { clearInterval(pollTimer); streamSend('error'); killPlayer(); return; }
-    if (r && r.playing && !started) { started = true; streamSend('playing'); playerVol = 0.001; setPlayerVolume(vol, 2500); playerVol = vol; clearInterval(pollTimer); keepAlive(); return; }
+    if (r && r.playing && !started) { started = true; streamSend('playing'); appliedVol = 0.001; clearInterval(pollTimer); setPlayerVolume(playerVol, 2500); keepAlive(); return; }
     if (tries > 50) { clearInterval(pollTimer); streamSend('error'); killPlayer(); }
   }, 500);
   return true;
 }
 function keepAlive() {
   // if the video pauses itself (end of a non-looping stream, network blip), nudge it back on
-  pollTimer = setInterval(() => { if (player && !player.isDestroyed()) player.webContents.executeJavaScript(PLAYER_JS(playerVol)).catch(() => {}); else clearInterval(pollTimer); }, 15000);
+  pollTimer = setInterval(() => { if (!player || player.isDestroyed()) return clearInterval(pollTimer); if (!fadeTimer) player.webContents.executeJavaScript(PLAYER_JS(appliedVol)).catch(() => {}); }, 15000);
 }
 ipcMain.handle('sound:play', (e, { url, volume }) => streamPlay(url, +volume || .4));
 ipcMain.handle('sound:stop', (e, fast) => {
@@ -532,7 +551,11 @@ ipcMain.handle('sound:stop', (e, fast) => {
   setTimeout(() => { if (player === p) killPlayer(); }, 1600);
   return true;
 });
-ipcMain.handle('sound:volume', (e, v) => { playerVol = +v; setPlayerVolume(playerVol, 250); return true; });
+ipcMain.handle('sound:volume', (e, v) => {
+  v = Math.max(0, Math.min(1, +v || 0)); playerVol = v;
+  // still fading in? let the fade-in carry on to the new level instead of jumping
+  setPlayerVolume(v, 250); return true;
+});
 
 // ---------- notebooks: videos ----------
 const mediaDir = () => path.join(dataDir(), 'media');
