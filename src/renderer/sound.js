@@ -41,11 +41,13 @@ function noise(kind, seconds = 3) {
   return buf;
 }
 function applyVolumes() {
+  applyStreamVolume();
   if (!ctx) return;
   const s = settings();
   fxBus.gain.value = s.sounds === false ? 0 : (s.volume ?? .6) * .9;
-  if (amb.name) ambBus.gain.setTargetAtTime((s.ambientVolume ?? .5) * .9, ctx.currentTime, .3);
+  if (amb.name && !amb.stream) ambBus.gain.setTargetAtTime((s.ambientVolume ?? .5) * .9, ctx.currentTime, .3);
 }
+function applyStreamVolume() { if (amb.stream) window.hearth.streamVolume(streamVol()); }
 
 // ------------------------------------------------------------------ helpers
 function env(g, t, a, peak, d) {
@@ -84,8 +86,20 @@ const FX = {
   },
   // a page turning: a quick papery sweep
   page(t) {
-    noiseHit(t, { buf: 'pink', type: 'bandpass', freq: 900, sweepTo: 3400, q: .8, a: .04, peak: .22, d: .28 });
-    noiseHit(t + .12, { buf: 'white', type: 'highpass', freq: 3000, a: .02, peak: .06, d: .18 });
+    // the soft whoosh of the sheet moving through the air
+    noiseHit(t, { buf: 'pink', type: 'bandpass', freq: 700, sweepTo: 1800, q: .6, a: .12, peak: .07, d: .32 });
+    // paper crinkle: lots of tiny, dry grains that swell and fade as the page bends over
+    const n = 34;
+    for (let i = 0; i < n; i++) {
+      const k = i / n;
+      const at = t + .03 + k * .42 + (Math.random() - .5) * .02;
+      const env = Math.sin(Math.PI * Math.min(1, k * 1.15));
+      noiseHit(at, { buf: 'white', type: 'bandpass', freq: 2200 + Math.random() * 4200, q: 1.4 + Math.random() * 2,
+        a: .001, peak: (.012 + Math.random() * .05) * env + .004, d: .006 + Math.random() * .02 });
+    }
+    // the page settling flat
+    noiseHit(t + .47, { buf: 'pink', type: 'lowpass', freq: 650, a: .004, peak: .09, d: .07 });
+    noiseHit(t + .47, { buf: 'white', type: 'bandpass', freq: 3000, q: .8, a: .002, peak: .025, d: .04 });
   },
   // sticky note pressed onto paper
   stick(t) {
@@ -98,9 +112,10 @@ const FX = {
   swish(t) { noiseHit(t, { buf: 'pink', type: 'bandpass', freq: 600, sweepTo: 2600, q: .6, a: .03, peak: .1, d: .18 }); },
   // a singing bowl for screen breaks
   bell(t) {
-    [[261.6, .18, 3.2], [523.3, .07, 2.6], [784.9, .045, 2.2], [1046.5, .025, 1.6], [1569.8, .012, 1.2]].forEach(([f, p, d]) => {
-      tone(t, { freq: f, peak: p, a: .02, d });
-      tone(t, { freq: f * 1.004, peak: p * .5, a: .02, d: d * .9 });
+    // a gentle, distant singing bowl: soft swell, low and quiet
+    [[392, .045, 3.4], [784.9, .014, 2.6], [1176, .006, 1.8]].forEach(([f, p, d]) => {
+      tone(t, { freq: f, peak: p, a: .09, d });
+      tone(t, { freq: f * 1.003, peak: p * .4, a: .12, d: d * .9 });
     });
   },
   water(t) {
@@ -321,8 +336,54 @@ const BUILD = {
     loop('brown', [['lowpass', 180]], .3);
   }
 };
+// ---------- streamed soundscapes (YouTube or any link), played by Hearth in the background
+const DEFAULT_LINKS = {
+  fire: 'https://www.youtube.com/watch?v=cdKop6aixVE',
+  cafe: 'https://www.youtube.com/watch?v=c18WZZa4KIA',
+  rain: 'https://www.youtube.com/watch?v=HWgOhngBGZo',
+  waves: 'https://www.youtube.com/watch?v=bn9F19Hi1Lk'
+};
+const canStream = () => !!(window.hearth && window.hearth.streamPlay);
+function sourceFor(name) {
+  const s = settings();
+  const custom = (s.customSounds || []).find(c => c.id === name);
+  if (custom) return canStream() ? { kind: 'stream', url: custom.url, label: custom.name } : { kind: 'none', label: custom.name };
+  if (!BUILD[name]) return { kind: 'none' };
+  const src = (s.soundSources || {})[name] || {};
+  const mode = src.mode || 'stream';
+  if (mode === 'stream' && canStream()) return { kind: 'stream', url: src.url || DEFAULT_LINKS[name] };
+  return { kind: 'synth' };
+}
+const streamVol = () => { const v = settings().ambientVolume ?? .5; return Math.max(0, Math.min(1, v * .75)); };
+if (window.hearth && window.hearth.onStreamState) {
+  window.hearth.onStreamState((st) => {
+    if (!amb.stream || st.url !== amb.streamUrl) return;
+    amb.streamState = st.state;
+    if (st.state === 'error') {
+      const name = amb.name;
+      amb.stream = false; amb.name = null;
+      if (BUILD[name]) {
+        startSynth(name);
+        window.H && window.H.toast("Couldn't reach that stream, so the built-in sound is playing instead", { ic: 'globe', timeout: 6000 });
+      } else {
+        window.H && window.H.toast("Couldn't play that link. Check it's a public video or audio link.", { ic: 'globe', timeout: 6000 });
+      }
+      window.H && window.H.refreshQuiet && window.H.refreshQuiet();
+    }
+  });
+}
 function ambient(name) {
   stopAmbient(true);
+  const src = sourceFor(name);
+  if (src.kind === 'none') return;
+  if (src.kind === 'stream') {
+    amb.name = name; amb.stream = true; amb.streamUrl = src.url; amb.streamState = 'loading';
+    window.hearth.streamPlay(src.url, streamVol());
+    return;
+  }
+  startSynth(name);
+}
+function startSynth(name) {
   if (!name || !BUILD[name]) return;
   if (!ensure()) return;
   amb.name = name;
@@ -339,6 +400,7 @@ function ambient(name) {
   ambBus.gain.linearRampToValueAtTime((settings().ambientVolume ?? .5) * .9, ctx.currentTime + 2.5);
 }
 function stopAmbient(fast) {
+  if (amb.stream) { window.hearth.streamStop(!!fast); amb.stream = false; amb.streamUrl = null; amb.name = null; return; }
   amb.timers.forEach(clearTimeout); amb.timers = [];
   const nodes = amb.nodes; amb.nodes = [];
   amb.name = null;
@@ -353,5 +415,5 @@ function stopAmbient(fast) {
   setTimeout(() => { try { dry && dry.disconnect(); wet && wet.disconnect(); } catch (e) {} }, (fade + .2) * 1000);
 }
 
-window.Sound = { play, ambient, stopAmbient, applyVolumes, SOUNDSCAPES, current: () => amb.name, _ctx: () => ctx, _bus: () => ambBus };
+window.Sound = { play, ambient, stopAmbient, applyVolumes, SOUNDSCAPES, DEFAULT_LINKS, sourceFor, canStream, current: () => amb.name, streaming: () => !!amb.stream, streamState: () => amb.streamState, _ctx: () => ctx, _bus: () => ambBus };
 })();

@@ -11,11 +11,11 @@ Grab the latest files from the **Releases** page on GitHub. Every push to `main`
 
 ### Building it yourself
 
-**Make the installer once:** double-click **`Make-Installer.bat`**. You don't need to install anything first. If Node.js isn't on the PC, the script downloads a private copy into a `.tools` folder, used only for building. After a few minutes it opens `dist\` with **`Hearth-Setup-1.1.0.exe`**.
+**Make the installer once:** double-click **`Make-Installer.bat`**. You don't need to install anything first. If Node.js isn't on the PC, the script downloads a private copy into a `.tools` folder, used only for building. After a few minutes it opens `dist\` with **`Hearth-Setup-1.3.0.exe`**.
 
-**Install:** double-click `Hearth-Setup-1.1.0.exe`. A setup wizard lets you choose just-me or all users and the install folder. It creates Start menu and desktop shortcuts, launches Hearth when it finishes, and adds an uninstaller in Windows *Apps*.
+**Install:** double-click `Hearth-Setup-1.3.0.exe`. A setup wizard lets you choose just-me or all users and the install folder. It creates Start menu and desktop shortcuts, launches Hearth when it finishes, and adds an uninstaller in Windows *Apps*.
 
-- **Silent install** (e.g. NinjaOne): `Hearth-Setup-1.1.0.exe /S`. Add `/allusers` for a machine-wide install.
+- **Silent install** (e.g. NinjaOne): `Hearth-Setup-1.3.0.exe /S`. Add `/allusers` for a machine-wide install.
 - The installer isn't code-signed, so Windows SmartScreen may say "Windows protected your PC" the first time. Click **More info → Run anyway**. Silent installs aren't affected.
 - Optional: if this folder is pushed to GitHub, `.github/workflows/build-installer.yml` builds the installer automatically on every push.
 - `run-dev.bat` runs Hearth straight from the source folder, for trying changes.
@@ -35,7 +35,8 @@ Your data is kept when you install a newer version over the top.
 - *Week* and *Day*: time blocking. Drag tasks from "all day" into hour slots, drag blocks to move them, pull the bottom edge to change their length, and click an empty slot to add a task there. A red line marks the current time.
 
 **Focus**: 25/50/90-minute timers or ▶ on any task.
-- Soundscapes (rain, café, fireside, waves) are generated live, with no audio files.
+- Soundscapes (rain, café, fireside, waves) stream from YouTube by default and fall back to built-in sounds when you're offline. Right-click a sound to switch it to the built-in version, use a different link, or reset it.
+- **Add your own sound**: the **+ Add** tile takes any YouTube link (lofi beats, a live stream, a playlist) with a name and icon. Right-click it to edit or remove it.
 - The *focus shield* holds break, water and posture reminders until you finish.
 - An optional, experimental *Windows do-not-disturb* silences toast notifications during focus.
 
@@ -48,15 +49,21 @@ Your data is kept when you install a newer version over the top.
 - **Templates**: meeting, 1:1, incident report, change request, project kick-off, stand-up and checklist. You can also save any page as your own template.
 - **Pictures** are taped onto the page. Drag them anywhere, pull the corner to resize, double-click to view full size.
 - **Organise the shelf**: right-click a page for Rename, Duplicate, Move up/down, Add to chapter / New chapter…, Move to notebook, Ribbon, Save as template, Export, and Delete. Chapters work like sub-folders: they collapse, and you can right-click one to rename, add a page, reorder or remove it. You can also drag pages around the shelf, into chapters or into other notebooks. Right-click a notebook to rename it, add pages or chapters, export or delete.
+- **Tools** (next to *Sticky*): tables (Tab moves between cells), checklists, shapes and arrows for circling or pointing at things (line, arrow, double arrow, elbow, rectangle, ellipse, parallelogram, triangle, diamond; hold Shift to keep them straight), videos from a YouTube link or a file on your PC, **password-locked stickies** (encrypted, and the password is never stored, so don't forget it), date stamps and dividers.
+- The **expand** button in the toolbar hides the main menu and the shelf for a full-width page. Click it again to bring them back.
 - **Checklists** tick like real boxes. Type `[] ` at the start of a line or use the checklist button.
 
-**Plus**: projects, Waiting on, recurring tasks (with optional times), snippets & links, a weekly review with a copyable summary, morning brief, end-of-day wrap-up, and quick capture with **Ctrl+Alt+Space** (Tab switches between task and sticky note).
+**Projects**: click the expand arrow on a project to see every task with its tick box, add tasks and set the next action right there. Hearth remembers which projects you left expanded. *Expand all / Simplify all* switches them all at once.
+
+**Recurring routines**: click a routine to open it and add notes, a priority, steps (these become subtasks), the time, the days and the project. Each task it creates carries these with it. *Add one to today now* creates one straight away.
+
+**Plus**: Waiting on, snippets & links, a weekly review with a copyable summary, morning brief, end-of-day wrap-up, and quick capture with **Ctrl+Alt+Space** (Tab switches between task and sticky note).
 
 **Make it yours (Settings)**:
 - Show, hide or reorder sidebar pages, or shrink the sidebar to icons only.
 - Daylight or Evening theme.
-- **Seasonal themes** (Auto, Autumn, Winter, Spring, Summer) with drifting leaves, snow, petals or sun motes.
-- **Sound effects** (pencil ticks, page rustles, sticky pats, chimes, a break bell), with volume and mute (the speaker icon by the logo).
+- **Seasonal themes** (Auto, Autumn, Winter, Spring, Summer) with their own colours (spring greens, summer blues). Drifting leaves, snow, petals or sun motes are optional and off by default.
+- **Sound effects** (pencil ticks, page rustles, sticky pats, chimes, a soft break bell), with volume and mute (the speaker icon by the logo).
 - Calendar hours, wellbeing intervals and smart-add options.
 
 **Shortcuts**: **N** new task · **Ctrl+1…9** switch pages · **Ctrl+\\** compact menu (icons only) · **Ctrl+Shift+\\** hide the notebook shelf · **Alt+←/→** turn notebook pages · **Esc** close panels.

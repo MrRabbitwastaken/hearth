@@ -31,7 +31,7 @@ function defaultData() {
       wrapTime: '17:00', focusMinutes: 25, launchAtStartup: true, closeToTray: true,
       staleProjectDays: 7, hotkey: 'CommandOrControl+Alt+Space', theme: 'light',
       nav: { hidden: [], order: [] },
-      season: 'auto', seasonFx: true,
+      season: 'auto', seasonFx: false, fxDefaultV2: true, customSounds: [], soundSources: {},
       sounds: true, volume: 0.6,
       ambient: 'rain', ambientAuto: true, ambientVolume: 0.5, focusShield: true, dnd: true,
       waterOn: true, waterEvery: 90, waterGoal: 8, postureOn: true, postureEvery: 45,
@@ -44,6 +44,10 @@ function normalise(d) {
   const out = { ...def, ...(d || {}) };
   out.settings = { ...def.settings, ...((d && d.settings) || {}) };
   out.settings.nav = { hidden: [], order: [], ...(out.settings.nav || {}) };
+  // 1.3: seasonal decorations are now off unless switched on
+  if (d && d.settings && !d.settings.fxDefaultV2) { out.settings.seasonFx = false; out.settings.fxDefaultV2 = true; }
+  out.settings.customSounds = out.settings.customSounds || [];
+  out.settings.soundSources = out.settings.soundSources || {};
   out.meta = out.meta || {};
   out.meta.breaks = out.meta.breaks || {};
   out.dayLog = out.dayLog || {};
@@ -155,7 +159,7 @@ const state = {
   view: 'today', entering: true, day: today(),
   addWhen: 'today', addProject: '', showDone: false, showTomorrow: true, showUpcoming: false,
   projectFilter: 'active', snipQuery: '', snipForm: null, recForm: { freq: 'weekdays', days: [1], dom: 1 },
-  weekOffset: 0, modal: null, breakOpen: false, pendingBreak: false, appInfo: {},
+  weekOffset: 0, modal: null, breakOpen: false, pendingBreak: false, appInfo: {}, recOpen: new Set(), projDone: new Set(),
   filter: { tag: null, prio: 0 }, lastWater: Date.now(), lastPosture: Date.now(),
   brk: { status: { activeSeconds: 0, intervalSeconds: 3600, snoozedUntil: 0, due: false, away: false }, at: Date.now() }
 };
@@ -235,6 +239,9 @@ function ensureRecurring() {
     if (!D.tasks.some(t => t.recurringId === r.id && t.date === k)) {
       const nt = newTask(r.title, { projectId: r.projectId || null, recurringId: r.id });
       if (r.time) { nt.time = r.time; if (D.settings.remindAtTime) nt.remind = 0; }
+      if (r.notes) nt.notes = r.notes;
+      if (r.priority) nt.priority = r.priority;
+      if ((r.steps || []).length) nt.subtasks = r.steps.filter(x => x.title.trim()).map(x => ({ id: uid(), title: x.title, done: false }));
       D.tasks.push(nt);
     }
     r.lastGenerated = k; changed = true;
@@ -425,7 +432,7 @@ function taskRow(t, { ctx = 'today' } = {}) {
   const meta = [
     t.time ? `<span class="chip time ${!t.done && t.date === today() && minsNow() > toMins(t.time) + (t.duration || 30) ? 'late' : ''}">${icon('clock')}${ft(t.time)}${t.remind != null ? icon('bell') : ''}</span>` : '',
     t.priority ? `<span class="chip prio p${t.priority}">${icon('flag')}P${t.priority}</span>` : '',
-    p ? `<span class="chip" style="color:${p.color}"><span class="dot"></span><span style="color:var(--text-2)">${esc(p.name)}</span></span>` : '',
+    p && ctx !== 'proj' ? `<span class="chip" style="color:${p.color}"><span class="dot"></span><span style="color:var(--text-2)">${esc(p.name)}</span></span>` : '',
     subs.length ? `<span class="chip subs ${sd === subs.length ? 'sage' : ''}" title="${sd} of ${subs.length} steps done">${icon('check')}${sd}/${subs.length}<i class="mini-bar"><b style="width:${Math.round(sd / subs.length * 100)}%"></b></i></span>` : '',
     ...(t.tags || []).map(g => `<button class="chip tag ${state.filter.tag === g ? 'on' : ''}" data-act="filter-tag" data-v="${esc(g)}" title="Show only #${esc(g)}">#${esc(g)}</button>`),
     t.recurringId ? `<span class="chip sky">${icon('repeat')}Recurring</span>` : '',
@@ -433,6 +440,7 @@ function taskRow(t, { ctx = 'today' } = {}) {
     t.carried > 0 && !t.done ? `<span class="chip honey" title="Moved to the next day ${t.carried} time(s)">${icon('arrowRight')}Carried ${t.carried}×</span>` : '',
     ctx === 'overdue' ? `<span class="chip honey">${icon('calendar')}${relDay(t.date)}</span>` : '',
     ctx === 'upcoming' ? `<span class="chip">${icon('calendar')}${relDay(t.date)}</span>` : '',
+    ctx === 'proj' && !t.done ? (!t.date ? '<span class="chip">Backlog</span>' : t.date < today() ? `<span class="chip honey">${icon('calendar')}${relDay(t.date)}</span>` : t.date === today() ? `<span class="chip accent">${icon('sun')}Today</span>` : `<span class="chip">${icon('calendar')}${relDay(t.date)}</span>`) : '',
     mins ? `<span class="chip sage">${icon('target')}${fmtMins(mins)} focused</span>` : '',
     t.notes && t.notes.trim() ? `<span class="chip" title="Has notes">${icon('note')}</span>` : ''
   ].join('');
@@ -450,7 +458,7 @@ function taskRow(t, { ctx = 'today' } = {}) {
       <button class="pill-btn sage" data-act="today" title="Bring into today">${icon('arrowLeft', 'sm')} Today</button>
       <button class="pill-btn soft" data-act="tomorrow" title="Move to tomorrow">Tomorrow ${icon('arrowRight', 'sm')}</button>
       <button class="icon-btn danger reveal" data-act="delete" title="Delete">${icon('trash', 'sm')}</button>`;
-  } else if (ctx === 'cal') {
+  } else if (ctx === 'cal' || ctx === 'proj') {
     actions = `
       <button class="icon-btn go reveal" data-act="focus-task" title="Focus on this">${icon('play', 'sm')}</button>
       ${t.date !== today() ? `<button class="pill-btn sage reveal" data-act="today" title="Bring into today">${icon('sun', 'sm')} Today</button>` : ''}
@@ -598,14 +606,89 @@ function breakCard() {
       <button class="btn sm" data-act="brk-taken" title="Reset the clock">I just had one</button>
     </div></div>`;
 }
+const SOUND_ICONS = ['music', 'rain', 'coffee', 'flame', 'waves', 'leaf', 'globe', 'sun', 'moon', 'sparkle'];
+function soundList() {
+  const sc = window.Sound ? Sound.SOUNDSCAPES : {};
+  return Object.entries(sc).map(([k, v]) => ({ id: k, label: v.label, ic: v.ic, builtin: true }))
+    .concat((D.settings.customSounds || []).map(c => ({ id: c.id, label: c.name, ic: c.ic || 'music', builtin: false })));
+}
 function ambientPicker() {
   const cur = window.Sound ? Sound.current() : null;
-  const sc = window.Sound ? Sound.SOUNDSCAPES : {};
+  const loading = cur && window.Sound && Sound.streaming() && Sound.streamState() === 'loading';
   return `<div class="ambient" data-k="ambient">
-    <div class="amb-row">${Object.entries(sc).map(([k, v]) => `<button class="amb ${cur === k ? 'on' : ''}" data-act="amb-play" data-v="${k}" title="${v.label}">${icon(v.ic, 'sm')}<span>${v.label}</span>${cur === k ? '<i class="eq"><b></b><b></b><b></b></i>' : ''}</button>`).join('')}</div>
-    <div class="amb-vol">${icon('volume', 'sm')}<input type="range" min="0" max="1" step="0.05" value="${D.settings.ambientVolume ?? .5}" data-set="ambientVolume" data-type="float" aria-label="Ambient volume"></div>
+    <div class="amb-row">${soundList().map(x => {
+      const src = window.Sound ? Sound.sourceFor(x.id) : { kind: 'synth' };
+      return `<button class="amb ${cur === x.id ? 'on' : ''} ${loading && cur === x.id ? 'loading' : ''}" data-act="amb-play" data-v="${x.id}" title="${esc(x.label)}${src.kind === 'stream' ? ' (streamed)' : ''}. Right-click for options">${icon(x.ic, 'sm')}<span>${esc(x.label)}</span>${src.kind === 'stream' ? `<i class="amb-src" title="Streamed from the web">${icon('globe', 'sm')}</i>` : ''}${cur === x.id ? '<i class="eq"><b></b><b></b><b></b></i>' : ''}</button>`;
+    }).join('')}
+    <button class="amb add" data-act="sound-add" title="Add your own sound from a link (e.g. lo-fi beats on YouTube)">${icon('plus', 'sm')}<span>Add</span></button></div>
+    <div class="amb-vol">${icon('volume', 'sm')}<input type="range" min="0" max="1" step="0.05" value="${D.settings.ambientVolume ?? .5}" data-set="ambientVolume" data-type="float" aria-label="Ambient volume">
+      ${loading ? '<span class="amb-status">Connecting…</span>' : ''}</div>
   </div>`;
 }
+function soundMenu(id, x, y) {
+  const builtin = !!(window.Sound && Sound.SOUNDSCAPES[id]);
+  const playing = Sound.current() === id;
+  if (builtin) {
+    const src = D.settings.soundSources[id] || {};
+    const mode = src.mode || 'stream';
+    const url = src.url || Sound.DEFAULT_LINKS[id];
+    return window.Notes.ctxMenu([
+      { header: Sound.SOUNDSCAPES[id].label },
+      { label: playing ? 'Stop' : 'Play', ic: playing ? 'stop' : 'play', fn: () => ACTIONS['amb-play']({ dataset: { v: id } }) },
+      '-',
+      { label: 'Streamed from YouTube (default)', ic: mode === 'stream' ? 'check' : 'globe', fn: () => setSoundMode(id, 'stream') },
+      { label: 'Built-in sound (works offline)', ic: mode === 'synth' ? 'check' : 'volume', fn: () => setSoundMode(id, 'synth') },
+      '-',
+      { label: 'Use a different link…', ic: 'link', fn: () => openModal('sound', 'edit:' + id) },
+      src.url && { label: 'Reset to the default link', ic: 'undo', fn: () => { D.settings.soundSources[id] = { ...src, url: undefined }; save(); restartIfPlaying(id); toast('Back to the default link', { ic: 'undo' }); } },
+      { label: 'Open the link in your browser', ic: 'external', fn: () => api.openExternal(url) }
+    ], x, y);
+  }
+  const c = D.settings.customSounds.find(s => s.id === id); if (!c) return;
+  return window.Notes.ctxMenu([
+    { header: c.name },
+    { label: playing ? 'Stop' : 'Play', ic: playing ? 'stop' : 'play', fn: () => ACTIONS['amb-play']({ dataset: { v: id } }) },
+    { label: 'Edit name, link or icon…', ic: 'edit', fn: () => openModal('sound', c.id) },
+    { label: 'Open the link in your browser', ic: 'external', fn: () => api.openExternal(c.url) },
+    '-',
+    { label: 'Remove this sound', ic: 'trash', danger: true, fn: () => {
+      const snap = snapshot();
+      if (Sound.current() === id) Sound.stopAmbient();
+      D.settings.customSounds = D.settings.customSounds.filter(s => s.id !== id);
+      if (D.settings.ambient === id) D.settings.ambient = 'rain';
+      save(); refresh(); undoable(`Removed "${c.name}"`, snap, 'trash');
+    } }
+  ], x, y);
+}
+function setSoundMode(id, mode) {
+  D.settings.soundSources[id] = { ...(D.settings.soundSources[id] || {}), mode };
+  save(); restartIfPlaying(id); refresh();
+  toast(mode === 'stream' ? 'Streaming from YouTube' : 'Using the built-in sound', { ic: mode === 'stream' ? 'globe' : 'volume' });
+}
+function restartIfPlaying(id) { if (Sound.current() === id) { Sound.stopAmbient(true); Sound.ambient(id); } }
+function modalSound(arg) {
+  const editBuiltin = typeof arg === 'string' && arg.startsWith('edit:') ? arg.slice(5) : null;
+  const c = !editBuiltin && arg ? D.settings.customSounds.find(s => s.id === arg) : null;
+  const f = state.soundForm || (state.soundForm = c ? { name: c.name, url: c.url, ic: c.ic || 'music' } : editBuiltin ? { url: (D.settings.soundSources[editBuiltin] || {}).url || Sound.DEFAULT_LINKS[editBuiltin] } : { name: '', url: '', ic: 'music' });
+  return `<div class="scrim" data-act="sound-cancel"></div>
+  <div class="modal sound-modal" role="dialog" aria-label="Sound">
+    <div class="modal-head"><div class="eyebrow">${icon('music', 'sm')} ${editBuiltin ? Sound.SOUNDSCAPES[editBuiltin].label + ' sound' : c ? 'Edit sound' : 'Add a sound'}</div>
+      <h2>${editBuiltin ? 'Use a different link' : c ? esc(c.name) : 'Your own soundscape'}</h2>
+      <p>${editBuiltin ? 'Paste a YouTube link (or any direct audio link) to play instead of the default.' : 'Paste a YouTube link, such as a lo-fi beats stream, or a direct link to an audio file or internet radio stream.'}</p></div>
+    <div class="modal-body" data-body>
+      ${editBuiltin ? '' : `<div class="field"><label>Name</label><input class="input" id="snd-name" value="${esc(f.name || '')}" placeholder="e.g. Lo-fi beats" maxlength="24"></div>`}
+      <div class="field"><label>Link</label><input class="input" id="snd-url" value="${esc(f.url || '')}" placeholder="https://www.youtube.com/watch?v=…" spellcheck="false">
+        <span class="hint">Live streams and long "10 hours" videos work best. Videos that don't allow embedding won't play.</span></div>
+      ${editBuiltin ? '' : `<div class="field"><label>Icon</label><div class="icon-pick">${SOUND_ICONS.map(i => `<button class="ip ${f.ic === i ? 'on' : ''}" data-act="snd-ic" data-v="${i}">${icon(i, 'sm')}</button>`).join('')}</div></div>`}
+    </div>
+    <div class="modal-foot" data-foot>
+      <button class="btn ghost left" data-act="sound-test">${icon('play', 'sm')}Try it</button>
+      <button class="btn ghost" data-act="sound-cancel">Cancel</button>
+      <button class="btn primary" data-act="sound-save" data-v="${esc(arg || '')}">${icon('check', 'sm')}Save</button></div>
+  </div>`;
+}
+function readSoundForm() { const f = state.soundForm || {}; const n = $('#snd-name'), u = $('#snd-url'); if (n) f.name = n.value; if (u) f.url = u.value; return f; }
+const validLink = (u) => { try { const x = new URL(u.trim()); return /^https?:$/.test(x.protocol); } catch (e) { return false; } };
 function focusCard() {
   const f = D.meta.focus;
   if (f) {
@@ -708,6 +791,7 @@ function viewProjects() {
         <button data-act="pfilter" data-v="active" class="${f === 'active' ? 'on' : ''}">Active ${n('active') || ''}</button>
         <button data-act="pfilter" data-v="paused" class="${f === 'paused' ? 'on' : ''}">Paused ${n('paused') || ''}</button>
         <button data-act="pfilter" data-v="done" class="${f === 'done' ? 'on' : ''}">Done ${n('done') || ''}</button></div>
+        <button class="btn ghost" data-act="p-expand-all" title="Expand or simplify every project">${icon(list.length && list.every(p => p.expanded) ? 'chevronUp' : 'chevron', 'sm')}${list.length && list.every(p => p.expanded) ? 'Simplify all' : 'Expand all'}</button>
         <button class="btn primary" data-act="project-new">${icon('plus', 'sm')}New project</button></div></div>
     <div class="project-grid">
       ${list.map(projectCard).join('')}
@@ -717,18 +801,47 @@ function viewProjects() {
   </div>`;
 }
 function projectCard(p) {
+  if (p.expanded) return projectCardBig(p);
   const tasks = T.ofProject(p.id);
   const open = tasks.filter(t => !t.done).length, done = tasks.filter(t => t.done).length;
   const pct = tasks.length ? done / tasks.length : 0;
   const quiet = daysSince(p.updatedAt || p.createdAt);
   const stale = p.status === 'active' && quiet >= D.settings.staleProjectDays;
   const dueChip = p.due ? (p.due < today() && p.status !== 'done' ? `<span class="chip clay">${icon('calendar')}Overdue ${fmtShort(p.due)}</span>` : `<span class="chip">${icon('calendar')}${relDay(p.due)}</span>`) : '';
-  return `<div class="card project-card ${stale ? 'stale' : ''}" style="--pc:${p.color}" data-act="project-open" data-pid="${p.id}" data-k="p-${p.id}">
+  return `<div class="card project-card ${stale ? 'stale' : ''}" style="--pc:${p.color}" data-act="project-open" data-pid="${p.id}" data-k="p-${p.id}" data-drop-project="${p.id}">
+    <button class="icon-btn mini p-exp" data-act="p-expand" data-pid="${p.id}" title="Expand: show all tasks here">${icon('expand', 'sm')}</button>
     <h4>${esc(p.name)}</h4>
     <div class="next">${p.nextAction ? `<b>Next:</b> ${esc(p.nextAction)}` : '<span class="muted">No next action set</span>'}</div>
     ${tasks.length ? `<div class="bar"><i style="width:${Math.round(pct * 100)}%"></i></div>` : ''}
     <div class="foot">${dueChip}<span class="chip">${plural(open, 'open task')}</span>
       ${stale ? `<span class="chip honey">${icon('clock')}Quiet ${quiet}d</span>` : quiet === 0 ? '<span class="chip sage">Touched today</span>' : `<span class="chip">${quiet}d ago</span>`}</div>
+  </div>`;
+}
+
+function projectCardBig(p) {
+  const tasks = T.ofProject(p.id);
+  const open = tasks.filter(t => !t.done).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999') || byOrder(a, b));
+  const done = tasks.filter(t => t.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
+  const pct = tasks.length ? done.length / tasks.length : 0;
+  const dueChip = p.due ? (p.due < today() && p.status !== 'done' ? `<span class="chip clay">${icon('calendar')}Overdue ${fmtShort(p.due)}</span>` : `<span class="chip">${icon('calendar')}Due ${relLow(p.due)}</span>`) : '';
+  const nb = D.notebooks.find(n => n.projectId === p.id);
+  const showDone = state.projDone.has(p.id);
+  return `<div class="card project-card big" style="--pc:${p.color}" data-k="p-${p.id}" data-drop-project="${p.id}">
+    <div class="pb-head">
+      <div style="min-width:0;flex:1"><h4>${esc(p.name)}</h4>
+        <div class="foot" style="margin-top:6px">${dueChip}<span class="chip">${plural(open.length, 'open task')}</span>${done.length ? `<span class="chip sage">${done.length} done</span>` : ''}${p.status !== 'active' ? `<span class="chip">${p.status === 'paused' ? 'Paused' : 'Done'}</span>` : ''}</div></div>
+      <div class="pb-ring">${ring(48, 5, pct, { cls: 'sage', label: Math.round(pct * 100) + '%' })}</div>
+      ${nb ? `<button class="btn sm ghost" data-act="open-note" data-nb="${nb.id}" title="Open the project's notebook">${icon('book', 'sm')}Notebook</button>` : ''}
+      <button class="btn sm" data-act="project-open" data-pid="${p.id}">${icon('edit', 'sm')}Details</button>
+      <button class="icon-btn" data-act="p-expand" data-pid="${p.id}" title="Simplify">${icon('collapse', 'sm')}</button>
+    </div>
+    <div class="pb-next"><span class="label-sm">Next action</span>
+      <div class="row"><input class="input" id="pn-${p.id}" data-pid="${p.id}" data-pnext="1" data-enter="p-next-today" value="${esc(p.nextAction || '')}" placeholder="What's the very next step? (Enter adds it to today)">
+      <button class="btn" data-act="p-next-today" data-pid="${p.id}">${icon('sun', 'sm')}To today</button></div></div>
+    <div class="list pb-tasks" data-drop-list="proj-${p.id}">${open.map(t => taskRow(t, { ctx: 'proj' })).join('') || '<div class="muted pb-empty">No open tasks. Add one below.</div>'}</div>
+    <div class="add-bar pb-add">${icon('plus', 'sm')}<input id="pa-${p.id}" data-pid="${p.id}" data-enter="p-add-inline" placeholder="Add a task to ${esc(p.name)}… (dates work too: 'fri', 'tomorrow 2pm')" maxlength="300"></div>
+    ${done.length ? `<button class="link pb-done-toggle" data-act="p-done-toggle" data-pid="${p.id}">${icon(showDone ? 'chevronUp' : 'chevron', 'sm')}${showDone ? 'Hide' : 'Show'} ${plural(done.length, 'finished task')}</button>
+      ${showDone ? `<div class="list pb-done">${done.map(t => taskRow(t, { ctx: 'proj' })).join('')}</div>` : ''}` : ''}
   </div>`;
 }
 
@@ -749,7 +862,7 @@ function viewWaiting() {
       <div class="list">${open.length ? open.map(waitRow).join('') : emptyState('hand', 'Nobody owes you anything', 'Add something above when you hand work off or ask for something.')}</div></div>
     ${got.length ? `<div class="section"><div class="section-head">${icon('check', 'sm')} Recently received</div>
       <div class="list">${got.map(w => `<div class="task done" data-k="w-${w.id}" data-id="${w.id}"><div class="task-main"><div class="task-title">${esc(w.title)}</div>
-        <div class="task-meta">${w.who ? `<span class="chip">${esc(w.who)}</span>` : ''}<span class="chip sage">Received ${relDay(w.doneDate).toLowerCase()}</span></div></div>
+        <div class="task-meta">${w.who ? `<span class="chip">${esc(w.who)}</span>` : ''}<span class="chip sage">Received ${relLow(w.doneDate)}</span></div></div>
         <div class="task-actions"><button class="icon-btn reveal" data-act="w-reopen" title="Reopen">${icon('undo', 'sm')}</button><button class="icon-btn danger reveal" data-act="w-delete" title="Delete">${icon('trash', 'sm')}</button></div></div>`).join('')}</div></div>` : ''}
   </div>`;
 }
@@ -787,20 +900,57 @@ function viewRecurring() {
         <div class="field" style="min-width:160px"><label>Project</label><select class="select" id="r-project">${projectOptions('')}</select></div>
         <button class="btn primary" data-act="rec-add" style="height:42px">${icon('plus', 'sm')}Add</button>
       </div></div>
-    <div class="list">${D.recurring.length ? D.recurring.map(r => {
-      const p = r.projectId ? P.get(r.projectId) : null;
-      const nx = nextOccurrence(r);
-      const on = r.active !== false;
-      return `<div class="task ${on ? '' : 'dim'}" data-k="r-${r.id}" data-id="${r.id}">
-        <div class="snip-ico link" style="width:32px;height:32px">${icon('repeat', 'sm')}</div>
-        <div class="task-main"><div class="task-title">${esc(r.title)}</div>
-          <div class="task-meta"><span class="chip sky">${describeRule(r)}</span>
-            ${on && nx ? `<span class="chip">Next: ${relDay(nx)}</span>` : ''}
-            ${!on ? '<span class="chip">Paused</span>' : ''}
-            ${p ? `<span class="chip" style="color:${p.color}"><span class="dot"></span><span style="color:var(--text-2)">${esc(p.name)}</span></span>` : ''}</div></div>
-        <div class="task-actions"><button class="switch ${on ? 'on' : ''}" data-act="rec-toggle" title="${on ? 'Pause' : 'Resume'}"></button>
-          <button class="icon-btn danger" data-act="rec-delete" title="Delete">${icon('trash', 'sm')}</button></div></div>`;
-    }).join('') : emptyState('repeat', 'No routines yet', 'Add the jobs you do on a schedule and they\'ll appear in Today automatically.')}</div>
+    <div class="list">${D.recurring.length ? D.recurring.map(recRow).join('') : emptyState('repeat', 'No routines yet', 'Add the jobs you do on a schedule and they\'ll appear in Today automatically.')}</div>
+  </div>`;
+}
+function recRow(r) {
+  const p = r.projectId ? P.get(r.projectId) : null;
+  const nx = nextOccurrence(r);
+  const on = r.active !== false;
+  const open = state.recOpen.has(r.id);
+  const order = [1, 2, 3, 4, 5, 6, 0];
+  const made = D.tasks.filter(t => t.recurringId === r.id);
+  const doneN = made.filter(t => t.done).length;
+  const steps = r.steps || [];
+  return `<div class="task rec-row ${on ? '' : 'dim'} ${open ? 'open' : ''}" data-k="r-${r.id}" data-id="${r.id}">
+    <div class="rec-top">
+      <div class="snip-ico link" style="width:32px;height:32px">${icon('repeat', 'sm')}</div>
+      <div class="task-main" data-act="rec-open" title="${open ? 'Collapse' : 'Show details'}"><div class="task-title">${esc(r.title)}</div>
+        <div class="task-meta"><span class="chip sky">${describeRule(r)}${r.time ? ' · ' + window.Tasks.fmtTime(r.time) : ''}</span>
+          ${on && nx ? `<span class="chip">Next: ${relDay(nx)}</span>` : ''}
+          ${!on ? '<span class="chip">Paused</span>' : ''}
+          ${r.priority ? `<span class="chip prio p${r.priority}">${icon('flag')}P${r.priority}</span>` : ''}
+          ${steps.length ? `<span class="chip">${icon('check')}${plural(steps.length, 'step')}</span>` : ''}
+          ${r.notes && r.notes.trim() && !open ? `<span class="chip" title="${esc(r.notes.slice(0, 200))}">${icon('note')}Notes</span>` : ''}
+          ${p ? `<span class="chip" style="color:${p.color}"><span class="dot"></span><span style="color:var(--text-2)">${esc(p.name)}</span></span>` : ''}</div></div>
+      <div class="task-actions">
+        <button class="icon-btn rec-chev ${open ? 'open' : ''}" data-act="rec-open" title="${open ? 'Collapse' : 'Details'}">${icon('chevron', 'sm')}</button>
+        <button class="switch ${on ? 'on' : ''}" data-act="rec-toggle" title="${on ? 'Pause' : 'Resume'}"></button>
+        <button class="icon-btn danger" data-act="rec-delete" title="Delete">${icon('trash', 'sm')}</button></div>
+    </div>
+    ${open ? `<div class="rec-detail">
+      <div class="rec-grid">
+        <div class="field" style="grid-column:1/-1"><label>Task name</label><input class="input" id="rt-${r.id}" data-rbind="title" value="${esc(r.title)}" maxlength="300"></div>
+        <div class="field"><label>Repeats</label><select class="select" data-rbind="freq">
+          ${[['daily', 'Every day'], ['weekdays', 'Weekdays'], ['weekly', 'Weekly on…'], ['monthly', 'Monthly on day…']].map(([v, l]) => `<option value="${v}" ${r.freq === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        ${r.freq === 'weekly' ? `<div class="field"><label>Days</label><div class="day-chips">${order.map(d => `<button class="day-chip ${(r.days || []).includes(d) ? 'on' : ''}" data-act="rec-eday" data-v="${d}">${WEEKDAYS[d][0]}</button>`).join('')}</div></div>` : ''}
+        ${r.freq === 'monthly' ? `<div class="field"><label>Day of month</label><input class="input num-input" type="number" min="1" max="31" data-rbind="dom" value="${r.dom || 1}"></div>` : ''}
+        <div class="field"><label>Time (optional)</label><input class="input" type="time" data-rbind="time" value="${r.time || ''}"></div>
+        <div class="field"><label>Priority</label><div class="seg prio-seg">${[0, 1, 2, 3].map(n => `<button data-act="rec-prio" data-v="${n}" class="${(r.priority || 0) === n ? 'on' : ''} ${n ? 'p' + n : ''}">${n ? 'P' + n : 'None'}</button>`).join('')}</div></div>
+        <div class="field"><label>Project</label><select class="select" data-rbind="projectId">${projectOptions(r.projectId || '')}</select></div>
+      </div>
+      <div class="field"><label>${icon('note', 'sm')} Description & notes</label>
+        <textarea class="textarea" id="rn-${r.id}" data-rbind="notes" rows="4" placeholder="What does this involve? Links, where the report lives, who to send it to… (copied into each task it creates)">${esc(r.notes || '')}</textarea></div>
+      <div class="field"><label>${icon('check', 'sm')} Steps <span class="hint" style="text-transform:none;letter-spacing:0;font-weight:600">become a fresh checklist on each task</span></label>
+        <div class="subtasks">${steps.map(st => `<div class="subtask" data-k="rs-${st.id}"><span class="step-dot"></span><input class="sub-input" id="rs-${st.id}" data-rstep="${st.id}" value="${esc(st.title)}" maxlength="200"><button class="icon-btn mini danger" data-act="rec-step-del" data-v="${st.id}" title="Remove">${icon('x', 'sm')}</button></div>`).join('')}</div>
+        <div class="add-bar sub-add">${icon('plus', 'sm')}<input id="rsa-${r.id}" placeholder="Add a step and press Enter…" data-enter="rec-step-add" maxlength="200"></div></div>
+      <div class="row wrap rec-foot">
+        <span class="muted" style="font-size:12.5px">${made.length ? `Created ${plural(made.length, 'task')} so far · ${doneN} done` : 'No tasks created yet'}${r.lastGenerated ? ` · last ${relLow(r.lastGenerated)}` : ''}</span>
+        <span style="flex:1"></span>
+        <button class="btn sm" data-act="rec-now">${icon('sun', 'sm')}Add one to today now</button>
+        <button class="btn sm ghost" data-act="rec-open">Done</button>
+      </div>
+    </div>` : ''}
   </div>`;
 }
 
@@ -969,7 +1119,8 @@ function viewSettings() {
       <div class="card"><h3>${icon('target', 'sm')} Focus</h3>
         <div class="set-row"><div class="t"><b>Default focus length</b><span>Used when you press ▶ on a task.</span></div>${num('focusMinutes', 5, 180)}<span class="muted">min</span></div>
         <div class="set-row"><div class="t"><b>Soundscape</b><span>Ambient sound for focus sessions.</span></div>
-          ${seg('ambient', [['off', 'None'], ...Object.entries(sc).map(([k, v]) => [k, v.label])])}</div>
+          ${seg('ambient', [['off', 'None'], ...soundList().map(x => [x.id, x.label])])}</div>
+        <div class="set-row sub-row"><div class="t"><span>The built-in four stream from YouTube by default and fall back to Hearth's own sounds if you're offline. Right-click any sound on the Focus card to switch source, change its link, or add your own.</span></div></div>
         <div class="set-row"><div class="t"><b>Play it automatically</b><span>Starts when a focus session starts, fades out when it ends.</span></div>${sw('ambientAuto')}</div>
         <div class="set-row"><div class="t"><b>Focus shield</b><span>Break, water and posture reminders wait politely until your session ends.</span></div>${sw('focusShield')}</div>
         <div class="set-row"><div class="t"><b>Silence Windows notifications</b><span>Turns off Windows toast notifications during focus and puts them back afterwards. Experimental.</span></div>${sw('dnd')}</div></div>
@@ -1067,7 +1218,7 @@ function closeModal() {
 function renderModal(fresh) {
   const root = $('#modal-root');
   const m = state.modal; if (!m) return;
-  const html = { project: modalProject, brief: modalBrief, wrap: modalWrap, task: (id) => window.Tasks.drawerHtml(id) }[m.type](m.arg);
+  const html = { project: modalProject, brief: modalBrief, wrap: modalWrap, task: (id) => window.Tasks.drawerHtml(id), sound: modalSound }[m.type](m.arg);
   if (!html) { state.modal = null; root.innerHTML = ''; return; }
   if (fresh) {
     root.innerHTML = html;
@@ -1143,7 +1294,7 @@ function modalBrief() {
         <div class="stat"><b>${due.length}</b><span>to chase</span></div>
         <div class="stat"><b>${stale.length}</b><span>quiet projects</span></div></div>
       ${overdue.length ? `<div class="field" data-k="b-over"><div class="row"><label class="label-sm" style="flex:1">Carried over · ${overdue.length}</label><button class="btn sm" data-act="overdue-all-today">Bring all into today</button></div>
-        <div class="list">${overdue.map(t => `<div class="brief-row" data-k="bo-${t.id}" data-id="${t.id}"><div class="grow">${esc(t.title)}<small>from ${relDay(t.date).toLowerCase()}</small></div>
+        <div class="list">${overdue.map(t => `<div class="brief-row" data-k="bo-${t.id}" data-id="${t.id}"><div class="grow">${esc(t.title)}<small>from ${relLow(t.date)}</small></div>
           <button class="pill-btn sage" data-act="today">${icon('arrowLeft', 'sm')} Today</button><button class="icon-btn go" data-act="toggle" title="Already done">${icon('check', 'sm')}</button><button class="icon-btn danger" data-act="delete" title="Drop it">${icon('x', 'sm')}</button></div>`).join('')}</div></div>` : ''}
       ${list.length ? `<div class="field" data-k="b-today"><label>On today's list</label><div class="mini-list">${list.slice(0, 6).map(t => `<div class="mini-item">${icon('sun', 'sm')}<span class="grow">${esc(t.title)}</span>${t.recurringId ? '<span class="chip sky">Recurring</span>' : ''}</div>`).join('')}
         ${list.length > 6 ? `<div class="muted">+ ${list.length - 6} more</div>` : ''}</div></div>` : ''}
@@ -1439,6 +1590,37 @@ const ACTIONS = {
     if (Sound.current() === k) { Sound.stopAmbient(); } else { Sound.ambient(k); D.settings.ambient = k; save(); }
     setTimeout(refresh, 30);
   },
+  'sound-add': () => { state.soundForm = null; openModal('sound', null); setTimeout(() => $('#snd-name')?.focus(), 80); },
+  'snd-ic': (el) => { readSoundForm(); state.soundForm.ic = el.dataset.v; renderModal(false); },
+  'sound-cancel': () => { if (state.soundTest) { Sound.stopAmbient(true); state.soundTest = false; } state.soundForm = null; closeModal(); },
+  'sound-test': () => {
+    const f = readSoundForm();
+    if (!validLink(f.url || '')) { toast('Paste a full link starting with https://', { ic: 'link' }); return; }
+    if (!api.streamPlay) { toast('Streaming works in the desktop app', { ic: 'globe' }); return; }
+    if (state.soundTest) { Sound.stopAmbient(true); state.soundTest = false; return; }
+    D.settings.customSounds.push({ id: '__test', name: 'Test', url: f.url.trim() });
+    Sound.ambient('__test'); state.soundTest = true;
+    D.settings.customSounds = D.settings.customSounds.filter(x => x.id !== '__test');
+    toast('Playing a preview… press Try it again to stop', { ic: 'play', timeout: 5000 });
+  },
+  'sound-save': (el) => {
+    const f = readSoundForm(); const arg = el.dataset.v || '';
+    if (!validLink(f.url || '')) { toast('Paste a full link starting with https://', { ic: 'link' }); $('#snd-url')?.focus(); return; }
+    if (state.soundTest) { Sound.stopAmbient(true); state.soundTest = false; }
+    if (arg.startsWith('edit:')) {
+      const id = arg.slice(5);
+      D.settings.soundSources[id] = { ...(D.settings.soundSources[id] || {}), url: f.url.trim(), mode: 'stream' };
+      save(); state.soundForm = null; closeModal(); restartIfPlaying(id);
+      toast('Link updated', { ic: 'link' }); return;
+    }
+    if (!(f.name || '').trim()) { toast('Give it a name', { ic: 'edit' }); $('#snd-name')?.focus(); return; }
+    let c = arg ? D.settings.customSounds.find(x => x.id === arg) : null;
+    if (c) Object.assign(c, { name: f.name.trim(), url: f.url.trim(), ic: f.ic || 'music' });
+    else { c = { id: 'snd-' + uid(), name: f.name.trim(), url: f.url.trim(), ic: f.ic || 'music' }; D.settings.customSounds.push(c); }
+    save(); state.soundForm = null; closeModal();
+    toast(`"${c.name}" added. Click it to play, right-click for options.`, { ic: 'music' });
+    if (arg) restartIfPlaying(c.id);
+  },
   'water-plus': () => { const k = today(); D.meta.water[k] = (D.meta.water[k] || 0) + 1; save(); Sound.play('water'); refresh(); if (D.meta.water[k] === (D.settings.waterGoal || 8)) toast('Water goal reached. Well done!', { ic: 'drop' }); },
   'water-minus': () => { const k = today(); D.meta.water[k] = Math.max(0, (D.meta.water[k] || 0) - 1); save(); refresh(); },
   'open-note': (el) => { if (state.modal) closeModalInstant(); window.Notes.open(el.dataset.nb, el.dataset.pg || null); },
@@ -1472,15 +1654,27 @@ const ACTIONS = {
   'project-open': (el) => openModal('project', el.dataset.pid),
   'p-status': (el) => { const p = P.get(state.modal.arg); p.status = el.dataset.v; p.updatedAt = Date.now(); save(); refresh(); },
   'p-color': (el) => { const p = P.get(state.modal.arg); p.color = el.dataset.v; save(); const ico = $('.drawer-head .snip-ico'); if (ico) ico.style.background = p.color; refresh(); },
-  'p-next-today': () => {
-    const p = P.get(state.modal.arg);
-    const input = $('#p-next');
+  'p-expand': (el) => { const p = P.get(el.dataset.pid); p.expanded = !p.expanded; save(); refresh(); window.Sound && Sound.play('tap'); },
+  'p-expand-all': () => { const list = D.projects.filter(p => p.status === state.projectFilter); const all = list.every(p => p.expanded); list.forEach(p => { p.expanded = !all; }); save(); refresh(); },
+  'p-done-toggle': (el) => { const id = el.dataset.pid; if (state.projDone.has(id)) state.projDone.delete(id); else state.projDone.add(id); refresh(); },
+  'p-add-inline': (el) => {
+    const pid = el.dataset.pid; const i = $('#pa-' + pid); const v = i.value.trim(); if (!v) return;
+    const pr = D.settings.smartAdd !== false ? window.Tasks.parse(v) : { title: v, tags: [], priority: 0 };
+    addTask(pr.title, { projectId: pid, date: pr.date !== undefined ? pr.date : null }, { time: pr.time || null, priority: pr.priority || 0, tags: pr.tags || [] });
+    touchProject(pid);
+    const i2 = $('#pa-' + pid); if (i2) { i2.value = ''; i2.focus(); }
+  },
+  'p-next-today': (el) => {
+    const pid = (el && el.dataset && el.dataset.pid) || (state.modal && state.modal.arg);
+    const p = P.get(pid);
+    const inline = !!(el && el.dataset && el.dataset.pid);
+    const input = inline ? $('#pn-' + pid) : $('#p-next');
     const v = (input ? input.value : p.nextAction || '').trim();
     if (!v) { input?.focus(); return; }
     p.nextAction = '';            // clear it so the next step can be typed straight away
     p.updatedAt = Date.now();
     addTask(v, { projectId: p.id });
-    const i2 = $('#p-next'); if (i2) { i2.value = ''; i2.focus(); }
+    const i2 = inline ? $('#pn-' + pid) : $('#p-next'); if (i2) { i2.value = ''; i2.focus(); }
     toast(`"${v.length > 40 ? v.slice(0, 38) + '…' : v}" added to today`, { ic: 'sun' });
   },
   'nav-collapse': () => toggleNav(),
@@ -1521,6 +1715,26 @@ const ACTIONS = {
     state.recDraft = '';
     save(); refresh();
     toast('Routine added', { ic: 'repeat' });
+  },
+  'rec-open': (el, id) => { if (state.recOpen.has(id)) state.recOpen.delete(id); else state.recOpen.add(id); refresh(); if (state.recOpen.has(id)) setTimeout(() => { const r = rowEl(id); r && r.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, 60); },
+  'rec-eday': (el, id) => { const r = D.recurring.find(x => x.id === id); const d = +el.dataset.v; r.days = (r.days || []).includes(d) ? r.days.filter(x => x !== d) : (r.days || []).concat(d); save(); refresh(); },
+  'rec-prio': (el, id) => { const r = D.recurring.find(x => x.id === id); r.priority = +el.dataset.v; save(); refresh(); },
+  'rec-step-add': (el) => {
+    const id = (el.closest('[data-id]') || {}).dataset?.id; const r = D.recurring.find(x => x.id === id); if (!r) return;
+    const i = $('#rsa-' + id); const v = i.value.trim(); if (!v) return;
+    r.steps = r.steps || []; r.steps.push({ id: uid(), title: v });
+    save(); refresh(); setTimeout(() => $('#rsa-' + id)?.focus(), 0);
+  },
+  'rec-step-del': (el, id) => { const r = D.recurring.find(x => x.id === id); r.steps = (r.steps || []).filter(x => x.id !== el.dataset.v); save(); refresh(); },
+  'rec-now': (el, id) => {
+    const r = D.recurring.find(x => x.id === id); if (!r) return;
+    const nt = newTask(r.title, { projectId: r.projectId || null, recurringId: r.id });
+    if (r.time) nt.time = r.time;
+    if (r.notes) nt.notes = r.notes;
+    if (r.priority) nt.priority = r.priority;
+    if ((r.steps || []).length) nt.subtasks = r.steps.filter(x => x.title.trim()).map(x => ({ id: uid(), title: x.title, done: false }));
+    D.tasks.push(nt); save(); refresh();
+    toast(`"${r.title}" added to today`, { ic: 'sun' });
   },
   'rec-toggle': (el, id) => { const r = D.recurring.find(x => x.id === id); r.active = r.active === false; if (r.active) ensureRecurring(); save(); refresh(); },
   'rec-delete': async (el, id, row) => { const snap = snapshot(); if (row) await animateOut(row); D.recurring = D.recurring.filter(x => x.id !== id); save(); refresh(); undoable('Routine deleted', snap, 'trash'); },
@@ -1643,6 +1857,24 @@ document.addEventListener('keydown', (e) => {
 
 document.addEventListener('input', (e) => {
   const t = e.target;
+  if (t.dataset.pnext) { const p = P.get(t.dataset.pid); if (p) { p.nextAction = t.value; save(); } return; }
+  if (t.dataset.rbind) {
+    const r = D.recurring.find(x => x.id === (t.closest('[data-id]') || {}).dataset?.id); if (!r) return;
+    let v = t.value; const k = t.dataset.rbind;
+    if (k === 'dom') { v = Math.max(1, Math.min(31, parseInt(v, 10) || 1)); }
+    if (k === 'title' && !v.trim()) return;
+    if (k === 'projectId' || k === 'time') v = v || null;
+    r[k] = v;
+    if (k === 'freq' && v === 'weekly' && !(r.days || []).length) r.days = [1];
+    save();
+    if (k === 'freq' || k === 'projectId' || k === 'time') refresh(); else refreshQuiet();
+    return;
+  }
+  if (t.dataset.rstep) {
+    const r = D.recurring.find(x => x.id === (t.closest('[data-id]') || {}).dataset?.id); if (!r) return;
+    const st = (r.steps || []).find(x => x.id === t.dataset.rstep); if (st) { st.title = t.value; save(); }
+    return;
+  }
   if (t.dataset.pbind && state.modal && state.modal.type === 'project') {
     const p = P.get(state.modal.arg); if (!p) return;
     p[t.dataset.pbind] = t.value; p.updatedAt = Date.now();
@@ -1680,6 +1912,13 @@ document.addEventListener('change', (e) => {
   if (t.dataset.set === 'volume') Sound.play('tick');
   if (t.dataset.set === 'waterGoal' || t.dataset.set === 'dayStart' || t.dataset.set === 'dayEnd') refresh();
   if (t.dataset.set === 'hotkey') api.hotkeyOk().then(ok => toast(ok ? 'Shortcut updated' : 'That shortcut is taken or invalid', { ic: 'sliders' }));
+});
+
+document.addEventListener('contextmenu', (e) => {
+  const b = e.target.closest && e.target.closest('.amb[data-v]');
+  if (!b) return;
+  e.preventDefault();
+  soundMenu(b.dataset.v, e.clientX, e.clientY);
 });
 
 // ================================================================== DAY / WRAP WATCHERS
@@ -1810,6 +2049,7 @@ window.H = {
   newTask, T, P, touchProject, addTask, toggleTask, openModal, closeModal, closeModalInstant: () => closeModalInstant(), go, animateOut,
   updateSidebar, REDUCED, EASE, IS_CAPTURE,
   ruleMatches, describeRule, taskRow, flipRender, refreshQuiet, startFocus, renderView,
+  setNav: (v) => { if (!!D.settings.navCollapsed !== !!v) toggleNav(); },
   renderModalBody: () => renderModal(false)
 };
 
@@ -1833,6 +2073,7 @@ async function boot() {
     setBreakStatus(s);
     if (!s.due && state.breakOpen && s.reason === 'back') closeBreak();
   });
+  if (api.onStreamState) api.onStreamState(() => setTimeout(() => { if (state.view === 'today') refreshQuiet(); }, 50));
   api.onBreakDue((s) => {
     setBreakStatus(s);
     if (shieldOn()) {

@@ -3,7 +3,7 @@
 
 const {
   app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, Notification,
-  powerMonitor, shell, nativeImage, clipboard, dialog, screen, protocol, net
+  powerMonitor, shell, nativeImage, clipboard, dialog, screen, protocol, net, session
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -428,6 +428,102 @@ ipcMain.handle('store:addSticky', (e, st) => {
   return true;
 });
 
+// ---------- streamed soundscapes ----------
+// YouTube (or any audio/video link) plays in a hidden window so it keeps going while you work.
+function embedUrl(raw) {
+  let u;
+  try { u = new URL(String(raw).trim()); } catch (_) { return null; }
+  if (!/^https?:$/.test(u.protocol)) return null;
+  const host = u.hostname.replace(/^www\.|^m\.|^music\./, '');
+  let id = null, list = u.searchParams.get('list');
+  if (host === 'youtu.be') id = u.pathname.slice(1).split('/')[0];
+  else if (/(^|\.)youtube(-nocookie)?\.com$/.test(host)) {
+    id = u.searchParams.get('v');
+    const m = u.pathname.match(/^\/(?:live|shorts|embed|v)\/([\w-]{6,})/);
+    if (!id && m) id = m[1];
+  }
+  const q = 'autoplay=1&controls=0&disablekb=1&modestbranding=1&playsinline=1&rel=0&iv_load_policy=3';
+  if (id) return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?${q}&loop=1&playlist=${encodeURIComponent(id)}`;
+  if (list) return `https://www.youtube-nocookie.com/embed/videoseries?list=${encodeURIComponent(list)}&${q}&loop=1`;
+  return u.href; // a direct audio/stream link
+}
+let player = null, playerUrl = null, playerVol = .4, fadeTimer = null, pollTimer = null;
+const PLAYER_JS = (v) => `(() => { const m = [...document.querySelectorAll('video,audio')];
+  m.forEach(x => { x.loop = true; x.muted = false; x.volume = ${Math.max(0, Math.min(1, v)).toFixed(3)}; if (x.paused) x.play().catch(() => {}); });
+  const err = document.querySelector('.ytp-error, .ytp-error-content');
+  return { media: m.length, playing: m.some(x => !x.paused && x.readyState > 2), error: !!(err && err.offsetParent !== null) }; })()`;
+function streamSend(state) { broadcast('sound:stream', { state, url: playerUrl }); }
+function killPlayer() {
+  clearInterval(fadeTimer); clearInterval(pollTimer);
+  if (player && !player.isDestroyed()) player.destroy();
+  player = null;
+}
+function setPlayerVolume(v, ms = 0) {
+  if (!player || player.isDestroyed()) return;
+  clearInterval(fadeTimer);
+  if (!ms) { player.webContents.executeJavaScript(PLAYER_JS(v)).catch(() => {}); return; }
+  const from = playerVol, steps = Math.max(1, Math.round(ms / 80)); let i = 0;
+  fadeTimer = setInterval(() => {
+    i++; const cur = from + (v - from) * (i / steps);
+    if (player && !player.isDestroyed()) player.webContents.executeJavaScript(PLAYER_JS(cur)).catch(() => {});
+    if (i >= steps) clearInterval(fadeTimer);
+  }, 80);
+}
+function streamPlay(url, vol) {
+  killPlayer();
+  const target = embedUrl(url);
+  playerUrl = url; playerVol = vol;
+  if (!target) { streamSend('error'); return false; }
+  player = new BrowserWindow({
+    show: false, width: 640, height: 360, skipTaskbar: true, focusable: false,
+    webPreferences: { partition: 'persist:hearth-sound', autoplayPolicy: 'no-user-gesture-required', backgroundThrottling: false, contextIsolation: true, nodeIntegration: false, sandbox: true }
+  });
+  player.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  player.webContents.on('did-fail-load', (e, code, desc, u, isMain) => { if (isMain && code !== -3) { streamSend('error'); killPlayer(); } });
+  player.webContents.on('render-process-gone', () => { streamSend('error'); killPlayer(); });
+  player.loadURL(target, { httpReferrer: 'https://hearth.app/' }).catch(() => {});
+  streamSend('loading');
+  // start quiet and fade up once something is playing; give up after ~25s
+  let tries = 0, started = false;
+  pollTimer = setInterval(async () => {
+    if (!player || player.isDestroyed()) return clearInterval(pollTimer);
+    tries++;
+    let r = null;
+    try { r = await player.webContents.executeJavaScript(PLAYER_JS(started ? playerVol : 0.001)); } catch (_) {}
+    if (r && r.error) { clearInterval(pollTimer); streamSend('error'); killPlayer(); return; }
+    if (r && r.playing && !started) { started = true; streamSend('playing'); playerVol = 0.001; setPlayerVolume(vol, 2500); playerVol = vol; clearInterval(pollTimer); keepAlive(); return; }
+    if (tries > 50) { clearInterval(pollTimer); streamSend('error'); killPlayer(); }
+  }, 500);
+  return true;
+}
+function keepAlive() {
+  // if the video pauses itself (end of a non-looping stream, network blip), nudge it back on
+  pollTimer = setInterval(() => { if (player && !player.isDestroyed()) player.webContents.executeJavaScript(PLAYER_JS(playerVol)).catch(() => {}); else clearInterval(pollTimer); }, 15000);
+}
+ipcMain.handle('sound:play', (e, { url, volume }) => streamPlay(url, +volume || .4));
+ipcMain.handle('sound:stop', (e, fast) => {
+  if (!player) return true;
+  if (fast) { killPlayer(); return true; }
+  const p = player; setPlayerVolume(0, 1400);
+  setTimeout(() => { if (player === p) killPlayer(); }, 1600);
+  return true;
+});
+ipcMain.handle('sound:volume', (e, v) => { playerVol = +v; setPlayerVolume(playerVol, 250); return true; });
+
+// ---------- notebooks: videos ----------
+const mediaDir = () => path.join(app.getPath('userData'), 'media');
+ipcMain.handle('notes:pickVideo', async () => {
+  const res = await dialog.showOpenDialog(mainWindow, { title: 'Add a video to this page', properties: ['openFile'], filters: [{ name: 'Videos', extensions: ['mp4', 'webm', 'mov', 'm4v', 'ogg', 'ogv'] }] });
+  if (res.canceled || !res.filePaths[0]) return null;
+  const src = res.filePaths[0];
+  const size = fs.statSync(src).size;
+  if (size > 1024 * 1024 * 1024) { dialog.showErrorBox('Video too large', 'Please pick a video under 1 GB.'); return null; }
+  fs.mkdirSync(mediaDir(), { recursive: true });
+  const name = `vid-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}${path.extname(src).toLowerCase()}`;
+  await fs.promises.copyFile(src, path.join(mediaDir(), name));
+  return { src: 'hearth://media/' + name, name: path.basename(src) };
+});
+
 // ---------- notebooks: images & PDF ----------
 ipcMain.handle('notes:saveImage', (e, dataUrl) => {
   const m = /^data:image\/(png|jpe?g|gif|webp);base64,(.+)$/i.exec(String(dataUrl));
@@ -544,10 +640,19 @@ app.on('second-instance', () => showMain());
 app.whenReady().then(() => {
   protocol.handle('hearth', (req) => {
     const u = new URL(req.url);
-    if (u.host !== 'img') return new Response('Not found', { status: 404 });
-    const file = path.join(imagesDir(), path.basename(decodeURIComponent(u.pathname)));
-    return net.fetch(pathToFileURL(file).href);
+    const dir = u.host === 'img' ? imagesDir() : u.host === 'media' ? mediaDir() : null;
+    if (!dir) return new Response('Not found', { status: 404 });
+    const file = path.join(dir, path.basename(decodeURIComponent(u.pathname)));
+    return net.fetch(pathToFileURL(file).href, { headers: req.headers });
   });
+  // YouTube needs to know who is embedding it; pages loaded from disk send no referrer
+  const yt = { urls: ['https://www.youtube-nocookie.com/*', 'https://www.youtube.com/*'] };
+  const addReferrer = (d, cb) => {
+    if (!d.requestHeaders.Referer && !d.requestHeaders.referer) d.requestHeaders.Referer = 'https://hearth.app/';
+    cb({ requestHeaders: d.requestHeaders });
+  };
+  session.defaultSession.webRequest.onBeforeSendHeaders(yt, addReferrer);
+  session.fromPartition('persist:hearth-sound').webRequest.onBeforeSendHeaders(yt, addReferrer);
   restoreDndSync(); // in case Hearth was closed mid-focus
   loadData();
   createMainWindow();
@@ -566,7 +671,7 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
-  quitting = true; writeNow(); restoreDndSync();
+  quitting = true; writeNow(); restoreDndSync(); killPlayer();
   if (PORTABLE) { try { fs.unlinkSync(portableLnk()); } catch (_) {} }
 });
 app.on('will-quit', () => globalShortcut.unregisterAll());

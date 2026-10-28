@@ -34,6 +34,11 @@ contextBridge.exposeInMainWorld('hearth', {
   hotkeyOk: () => ipcRenderer.invoke('app:hotkeyOk'),
   dataPath: () => ipcRenderer.invoke('app:dataPath'),
   appInfo: () => ipcRenderer.invoke('app:info'),
+  streamPlay: (url, volume) => ipcRenderer.invoke('sound:play', { url, volume }),
+  streamStop: (fast) => ipcRenderer.invoke('sound:stop', fast),
+  streamVolume: (v) => ipcRenderer.invoke('sound:volume', v),
+  onStreamState: on('sound:stream'),
+  pickVideo: () => ipcRenderer.invoke('notes:pickVideo'),
   exportData: () => ipcRenderer.invoke('app:export'),
   importData: () => ipcRenderer.invoke('app:import')
 });

@@ -305,3 +305,55 @@ html.nav-collapsed .nav-item .count { position: absolute; top: 1px; left: 33px; 
 html.nav-collapsed .nav-sep { margin-left: 4px; margin-right: 4px; }
 html.nav-collapsed .clock-widget { padding: 8px; justify-content: center; }
 html.nav-collapsed .clock-widget .meta, html.nav-collapsed .clock-widget .mini-btns { display: none; }
+
+/* ---------- recurring: expandable routines ---------- */
+.rec-row { flex-direction: column; align-items: stretch; gap: 0; padding: 0; }
+.rec-top { display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 12px; min-height: 52px; }
+.rec-row .task-main { cursor: pointer; }
+.rec-chev svg { transition: transform .3s var(--ease); }
+.rec-chev.open svg { transform: rotate(180deg); }
+.rec-row.open { border-color: color-mix(in srgb, var(--sky) 45%, var(--line)); box-shadow: var(--shadow); }
+.rec-detail { padding: 6px 18px 16px 56px; display: flex; flex-direction: column; gap: 16px; border-top: 1px dashed var(--line); animation: rise .35s var(--ease) both; }
+.rec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px 16px; padding-top: 12px; }
+.step-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--sky); opacity: .6; flex: none; margin: 0 6px 0 6px; }
+.rec-foot { padding-top: 8px; border-top: 1px dashed var(--line); }
+
+/* ---------- projects: expanded cards ---------- */
+.project-card .p-exp { position: absolute; top: 10px; right: 10px; opacity: 0; transition: opacity .2s; z-index: 2; }
+.project-card:hover .p-exp { opacity: 1; }
+.project-card.big { grid-column: 1 / -1; cursor: default; min-height: 0; gap: 14px; padding: 20px 22px 18px 26px; animation: rise .4s var(--ease) both; }
+.project-card.big:hover { transform: none; }
+.pb-head { display: flex; align-items: flex-start; gap: 12px; }
+.pb-head h4 { font-size: 24px; }
+.pb-ring { flex: none; margin-top: -4px; }
+.pb-next .row { margin-top: 6px; }
+.pb-tasks { gap: 6px; }
+.pb-tasks .task { box-shadow: none; background: var(--bg); }
+.pb-tasks .task:hover { background: var(--surface); }
+.pb-empty { padding: 6px 4px; font-size: 13.5px; }
+.pb-add { margin: 0; box-shadow: none; }
+.pb-done-toggle { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; }
+.pb-done .task { background: transparent; }
+.project-card.drop-hover { outline: 2px dashed var(--accent); outline-offset: 3px; }
+
+/* ---------- ambient sound extras ---------- */
+.amb-row { grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); }
+.amb span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 3px; }
+.amb .amb-src { position: absolute; bottom: 4px; right: 5px; opacity: .45; display: grid; }
+.amb .amb-src svg { width: 10px; height: 10px; }
+.amb.add { border-style: dashed; color: var(--text-3); background: transparent; }
+.amb.add:hover { color: var(--accent); border-color: var(--accent); }
+.amb.loading { animation: amb-pulse 1.2s ease-in-out infinite; }
+@keyframes amb-pulse { 50% { opacity: .55; } }
+.amb-status { font-size: 11.5px; font-weight: 700; color: var(--text-3); white-space: nowrap; }
+.icon-pick { display: flex; flex-wrap: wrap; gap: 6px; }
+.icon-pick .ip { width: 38px; height: 38px; border-radius: 11px; border: 1px solid var(--line); background: var(--surface); display: grid; place-items: center; color: var(--text-2); transition: all .2s var(--ease); }
+.icon-pick .ip.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); transform: translateY(-2px); }
+
+/* ---------- seasons: spring greens, summer blues ---------- */
+:root[data-season="spring"] { --accent: #4F8A47; --accent-hover: #42773B; --accent-soft: #DDEBD4; --accent-ink: #F6FBF2; --sage: #6E9F5B; --sage-soft: #E2EFD9; --honey: #C9A227; --honey-soft: #F5EDC8; --sky: #5D9A8C; --sky-soft: #DCEDE8; --bg: #F3F5EB; --bg-deep: #E5EBD8; --surface-2: #ECF0E1; --line: #DCE3CC; --line-strong: #C9D3B5; }
+:root[data-season="summer"] { --accent: #2D7FB0; --accent-hover: #23699A; --accent-soft: #D6EAF5; --accent-ink: #F3FAFF; --sage: #2E9C8F; --sage-soft: #D5EFEC; --honey: #E8923A; --honey-soft: #FBE6CF; --sky: #3E8FC4; --sky-soft: #D9EBF7; --clay: #D9574A; --clay-soft: #F9DEDA; --bg: #F3F6F7; --bg-deep: #E4ECF0; --surface: #FCFDFD; --surface-2: #EBF1F4; --line: #D8E3E9; --line-strong: #C3D3DC; }
+:root[data-theme="dark"][data-season="spring"] { --accent: #86C277; --accent-soft: #2B3D25; --accent-ink: #14200F; --bg: #1C211A; --bg-deep: #171B15; --surface: #252B22; --surface-2: #2D3429; --line: #3A4434; --line-strong: #4A5642; }
+:root[data-theme="dark"][data-season="summer"] { --accent: #5DB1E3; --accent-soft: #1F3747; --accent-ink: #0D1C26; --sage: #5CC3B5; --honey: #F1A65A; --bg: #181E22; --bg-deep: #13181B; --surface: #20282D; --surface-2: #283238; --line: #34424A; --line-strong: #44545E; }
+:root[data-season="spring"] .brand-name, :root[data-season="summer"] .brand-name { color: var(--text); }
+:root[data-season="summer"] .page-head h1 em, :root[data-season="spring"] .page-head h1 em { color: var(--accent); }

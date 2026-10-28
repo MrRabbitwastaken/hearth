@@ -205,6 +205,7 @@ function light() {
 
 function leave() {
   commitEditor(true);
+  lockAll(); selectShape(null);
   closeLightbox();
   processActions(curPg());
   hideSelbar();
@@ -319,6 +320,7 @@ function pageHtml(nb, pg, idx) {
     <div class="page-body" id="page-body" contenteditable="${ns.tool === 'type' ? 'true' : 'false'}" spellcheck="true" data-placeholder="Start writing… paste links or pictures, or add a sticky note.">${pg.html || ''}</div>
     <canvas class="ink" id="ink"></canvas>
     <div class="photos" id="photos">${(pg.images || []).map(photoHtml).join('')}</div>
+    <svg class="shapes" id="shapes"></svg>
     <div class="stickies" id="stickies">${(pg.stickies || []).map(stickyHtml).join('')}</div>
     ${coffee ? `<svg class="coffee" viewBox="0 0 120 120" style="--r:${hash(pg.id) % 360}deg"><circle cx="60" cy="60" r="46" fill="none" stroke="#8B5A2B" stroke-width="7" stroke-dasharray="210 18 40 22" opacity=".09"/><circle cx="60" cy="60" r="41" fill="none" stroke="#8B5A2B" stroke-width="1.5" opacity=".07"/><circle cx="64" cy="58" r="39" fill="#8B5A2B" opacity=".025"/></svg>` : ''}
     <footer class="page-num">— ${nb.kind === 'journal' ? esc(H().fmtShort(pg.date || H().today())) : idx + 1} —</footer>
@@ -329,14 +331,19 @@ function stickyHtml(s) {
   const fastener = s.attach === 'clip'
     ? `<svg class="clip" viewBox="0 0 24 60"><path d="M8 40V12a4.5 4.5 0 0 1 9 0v34a7 7 0 0 1-14 0V16" fill="none" stroke-width="2.4" stroke-linecap="round"/></svg>`
     : '<span class="pin"></span>';
-  return `<div class="sticky s-${s.color || 'yellow'} at-${s.attach || 'pin'} ${s.onDesk ? 'on-desk' : ''}" data-sid="${s.id}" style="left:${s.x}%;top:${s.y}px;--rot:${s.rot || 0}deg">
+  const open = s.locked && unlocked.has(s.id);
+  const body = !s.locked ? `<div class="sticky-text" contenteditable="true" spellcheck="true" data-placeholder="Write something…">${esc(s.text || '').replace(/\n/g, '<br>')}</div>`
+    : open ? `<div class="sticky-text" contenteditable="true" spellcheck="false" data-placeholder="Write something private…">${esc(unlocked.get(s.id).text || '').replace(/\n/g, '<br>')}</div>`
+    : `<div class="lock-face" data-act="st-unlock">${icon('lock')}<b>Locked note</b><span>Click to unlock</span></div>`;
+  return `<div class="sticky s-${s.color || 'yellow'} at-${s.attach || 'pin'} ${s.onDesk ? 'on-desk' : ''} ${s.locked ? 'locked' : ''} ${open ? 'unlocked' : ''}" data-sid="${s.id}" style="left:${s.x}%;top:${s.y}px;--rot:${s.rot || 0}deg">
     ${fastener}
-    <div class="sticky-text" contenteditable="true" spellcheck="true" data-placeholder="Write something…">${esc(s.text || '').replace(/\n/g, '<br>')}</div>
+    ${s.locked ? `<span class="lock-badge" title="${open ? 'Unlocked for now' : 'Password protected'}">${icon(open ? 'unlock' : 'lock', 'sm')}</span>` : ''}
+    ${body}
     <div class="sticky-tools">
       ${STICKY_COLOURS.map(c => `<button class="sdot s-${c} ${s.color === c ? 'on' : ''}" data-act="st-color" data-v="${c}" title="${c}"></button>`).join('')}
       <span class="sep"></span>
       <button class="icon-btn mini" data-act="st-attach" title="${s.attach === 'clip' ? 'Use a pin' : 'Use a paperclip'}">${icon(s.attach === 'clip' ? 'pin' : 'clip', 'sm')}</button>
-      <button class="icon-btn mini ${s.onDesk ? 'lit' : ''}" data-act="st-desk" title="${s.onDesk ? 'Remove from your Today desk' : 'Pin to your Today desk'}">${icon('sun', 'sm')}</button>
+      ${s.locked ? (open ? `<button class="icon-btn mini" data-act="st-lock" title="Lock it again">${icon('lock', 'sm')}</button>` : '') : `<button class="icon-btn mini ${s.onDesk ? 'lit' : ''}" data-act="st-desk" title="${s.onDesk ? 'Remove from your Today desk' : 'Pin to your Today desk'}">${icon('sun', 'sm')}</button>`}
       <button class="icon-btn mini danger" data-act="st-del" title="Remove">${icon('trash', 'sm')}</button>
     </div>
   </div>`;
@@ -404,13 +411,16 @@ function fitPage() {
   if (!page || !body || !pg) return;
   fitting = true;
   const w = page.clientWidth;
-  const stickBottom = Math.max(0, ...$$('#stickies .sticky, #photos .photo', page).map(el => el.offsetTop + el.offsetHeight + 60));
+  const stickBottom = Math.max(0, ...$$('#stickies .sticky, #photos .photo', page).map(el => el.offsetTop + el.offsetHeight + 60),
+    ...(pg.shapes || []).map(sh => Math.max(sh.y1, sh.y2) + 60));
   const inkBottom = Math.max(0, ...(pg.strokes || []).flatMap(s => s.pts.map(p => p[1] + 40)));
   const r = document.createRange(); r.selectNodeContents(body);
   const content = body.childNodes.length ? r.getBoundingClientRect().bottom - page.getBoundingClientRect().top : body.offsetTop;
   const want = Math.max(Math.round(w * 1.32), Math.round(content) + 160, stickBottom, inkBottom);
   if (Math.abs(page.offsetHeight - want) > 2) page.style.minHeight = want + 'px';
+  if (pg.w !== w || !$('#shapes').dataset.r) renderShapes();
   pg.w = w; pg.h = page.offsetHeight;
+  const sv = $('#shapes'); if (sv) sv.setAttribute('height', page.offsetHeight);
   sizeCanvas();
   fitting = false;
 }
@@ -464,6 +474,8 @@ function bodyChanged() {
 // ------------------------------------------------------------------ page turning
 function snapshot(el) {
   const c = el.cloneNode(true);
+  $$('iframe, video', c).forEach(x => { const d = document.createElement('div'); d.className = 'vid-ph'; d.innerHTML = icon('video'); x.replaceWith(d); });
+  $$('.shape-sel, .sel-bar', c).forEach(x => x.remove());
   c.removeAttribute('id');
   $$('[id]', c).forEach(x => x.removeAttribute('id'));
   $$('[contenteditable]', c).forEach(x => x.removeAttribute('contenteditable'));
@@ -495,6 +507,8 @@ function flipper(content, h) {
 function turnTo(nbId, pgId, dir) {
   if (nbId === ns.nbId && pgId === ns.pgId) return;
   commitEditor(true);
+  lockAll(); selectShape(null);
+  if (ns.tool === 'shape') ns.tool = 'type';
   const tp = pgId && getPg(pgId), tnb = getNb(nbId);
   if (tp && tnb) { const ch = chapterOf(tnb, tp); if (ch && ch.collapsed) ch.collapsed = false; }
   processActions(curPg());
@@ -521,22 +535,24 @@ function turnTo(nbId, pgId, dir) {
   window.Sound && Sound.play('page');
   const wrap = $('#page-wrap'), newPage = $('#page');
   if (!wrap || !newPage) return;
+  // one continuous, eased swing (no keyframe "kinks"), started on the next frame so layout has settled
+  const dur = 820, ease = 'cubic-bezier(.42, 0, .22, 1)';
   const cast = document.createElement('div'); cast.className = 'turn-cast'; wrap.appendChild(cast);
-  const dur = 950;
-  if (dir > 0) {
-    const f = flipper(oldSnap, oldH); wrap.appendChild(f);
-    f.animate([{ transform: 'rotateY(0deg)' }, { transform: 'rotateY(-12deg)', offset: .15 }, { transform: 'rotateY(-78deg)', offset: .6 }, { transform: 'rotateY(-180deg)' }], { duration: dur, easing: 'ease-in-out', fill: 'forwards' });
-    f.querySelector('.turn-shade').animate([{ opacity: 0 }, { opacity: .55, offset: .45 }, { opacity: 0 }], { duration: dur * .5, easing: 'ease-in', fill: 'forwards' });
-    cast.animate([{ opacity: .5 }, { opacity: 0 }], { duration: dur * .8, easing: 'ease-out', fill: 'forwards' });
-    setTimeout(() => { f.remove(); cast.remove(); }, dur + 20);
-  } else {
-    const under = document.createElement('div'); under.className = 'flip-under'; under.appendChild(oldSnap); wrap.appendChild(under);
-    const f = flipper(snapshot(newPage), newPage.offsetHeight); wrap.appendChild(f);
-    f.animate([{ transform: 'rotateY(-180deg)' }, { transform: 'rotateY(-100deg)', offset: .4 }, { transform: 'rotateY(-14deg)', offset: .85 }, { transform: 'rotateY(0deg)' }], { duration: dur, easing: 'ease-in-out', fill: 'forwards' });
-    f.querySelector('.turn-shade').animate([{ opacity: 0 }, { opacity: .5, offset: .55 }, { opacity: 0 }], { duration: dur, easing: 'ease-out', fill: 'forwards' });
-    cast.animate([{ opacity: 0 }, { opacity: .45, offset: .7 }, { opacity: 0 }], { duration: dur, fill: 'forwards' });
-    setTimeout(() => { f.remove(); under.remove(); cast.remove(); }, dur + 20);
-  }
+  let f, under = null;
+  if (dir > 0) { f = flipper(oldSnap, oldH); }
+  else { under = document.createElement('div'); under.className = 'flip-under'; under.appendChild(oldSnap); wrap.appendChild(under); f = flipper(snapshot(newPage), newPage.offsetHeight); }
+  f.style.transform = dir > 0 ? 'rotateY(0deg)' : 'rotateY(-180deg)';
+  wrap.appendChild(f);
+  const shade = f.querySelector('.turn-shade'), back = f.querySelector('.back');
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const from = dir > 0 ? 0 : -180, to = dir > 0 ? -180 : 0;
+    f.animate([{ transform: `rotateY(${from}deg)` }, { transform: `rotateY(${to}deg)` }], { duration: dur, easing: ease, fill: 'forwards' });
+    // the page darkens as it lifts towards you and lightens as it lands
+    shade.animate([{ opacity: dir > 0 ? 0 : .35 }, { opacity: .3, offset: .5 }, { opacity: dir > 0 ? .35 : 0 }], { duration: dur, easing: ease, fill: 'forwards' });
+    back.animate([{ filter: 'brightness(.88)' }, { filter: 'brightness(1)' }], { duration: dur, easing: ease, fill: 'forwards' });
+    cast.animate([{ opacity: dir > 0 ? .35 : 0 }, { opacity: .25, offset: .55 }, { opacity: 0 }], { duration: dur, easing: 'ease-out', fill: 'forwards' });
+    setTimeout(() => { f.remove(); cast.remove(); under && under.remove(); }, dur + 40);
+  }));
 }
 function step(delta) {
   const list = pagesOf(ns.nbId);
@@ -602,6 +618,7 @@ function setupInk() {
   c.onpointerdown = (e) => {
     if (ns.tool === 'type') return;
     c.setPointerCapture(e.pointerId);
+    if (ns.tool === 'shape') { shapeDown(e, c); cur = { shaping: true }; return; }
     const pg = curPg(); pg.strokes = pg.strokes || [];
     if (ns.tool === 'eraser') { cur = { erasing: true }; erase(e); return; }
     cur = { tool: ns.tool === 'hl' ? 'hl' : 'pencil', color: PENS[ns.pen] || PENS.graphite, pts: [pos(e).map(v => +v.toFixed(2))] };
@@ -610,6 +627,7 @@ function setupInk() {
   };
   c.onpointermove = (e) => {
     if (!cur) return;
+    if (cur.shaping) { shapeMove(e, c); return; }
     if (cur.erasing) { erase(e); return; }
     const p = pos(e).map(v => +v.toFixed(2));
     const last = cur.pts[cur.pts.length - 1];
@@ -617,8 +635,9 @@ function setupInk() {
     cur.pts.push(p);
     drawInk();
   };
-  c.onpointerup = c.onpointercancel = () => {
+  c.onpointerup = c.onpointercancel = (e) => {
     if (!cur) return;
+    if (cur.shaping) { cur = null; shapeUp(e, c); return; }
     cur = null;
     const pg = curPg(); touch(pg); H().save(); fitPage();
   };
@@ -658,7 +677,7 @@ const stickyOf = (el) => { const pg = curPg(); const id = el.closest('.sticky')?
 let drag = null;
 document.addEventListener('pointerdown', (e) => {
   const st = e.target.closest('#stickies .sticky');
-  if (!st || e.button !== 0 || e.target.closest('.sticky-tools')) return;
+  if (!st || e.button !== 0 || e.target.closest('.sticky-tools') || e.target.closest('.lock-form')) return;
   const txt = e.target.closest('.sticky-text');
   if (txt && document.activeElement === txt) return; // editing: let the text be selected
   const page = $('#page');
@@ -796,8 +815,11 @@ function insertAtCaret(node, range) {
 }
 // ------------------------------------------------------------------ pictures (free-floating, like taped-in photos)
 function photoHtml(im) {
-  return `<figure class="photo free" data-iid="${im.id}" style="left:${im.x}%;top:${im.y}px;width:${im.w}px;--rot:${im.rot || 0}deg">
-    <img src="${esc(im.src)}" alt="" draggable="false"><span class="tape"></span>
+  const inner = im.kind === 'yt' ? `<div class="vid-wrap"><iframe src="${esc(im.src)}" title="Video" allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin" loading="lazy"></iframe></div>`
+    : im.kind === 'video' ? `<div class="vid-wrap"><video src="${esc(im.src)}" controls preload="metadata" playsinline></video></div>`
+    : `<img src="${esc(im.src)}" alt="" draggable="false">`;
+  return `<figure class="photo free ${im.kind ? 'is-video' : ''}" data-iid="${im.id}" style="left:${im.x}%;top:${im.y}px;width:${im.w}px;--rot:${im.rot || 0}deg">
+    ${inner}${im.kind ? `<span class="vid-grip" title="Drag to move">${icon('grip', 'sm')}${esc(im.label || 'Video')}</span>` : '<span class="tape"></span>'}
     <button class="ph-del" data-act="img-del" title="Remove picture">${icon('x', 'sm')}</button>
     <i class="ph-rz" title="Drag to resize"></i></figure>`;
 }
@@ -900,7 +922,7 @@ function removePicture(el) {
 let pdrag = null;
 document.addEventListener('pointerdown', (e) => {
   const ph = e.target.closest && e.target.closest('#photos .photo');
-  if (!ph || e.button !== 0 || e.target.closest('.ph-del')) return;
+  if (!ph || e.button !== 0 || e.target.closest('.ph-del') || e.target.closest('video')) return;
   const page = $('#page');
   e.preventDefault();
   hideSelbar();
@@ -945,7 +967,7 @@ document.addEventListener('pointerup', (e) => {
 let lightbox = null;
 function closeLightbox() { if (lightbox) { const l = lightbox; lightbox = null; l.classList.add('out'); setTimeout(() => l.remove(), 250); } }
 document.addEventListener('dblclick', (e) => {
-  const ph = e.target.closest && e.target.closest('#photos .photo'); if (!ph) return;
+  const ph = e.target.closest && e.target.closest('#photos .photo'); if (!ph || !ph.querySelector('img')) return;
   const src = ph.querySelector('img').src;
   lightbox = document.createElement('div');
   lightbox.className = 'lightbox';
@@ -1025,6 +1047,7 @@ document.addEventListener('input', (e) => {
   if (t.id === 'page-body') { if (e.inputType === 'insertText' && e.data === ' ') autoChecklist(); bodyChanged(); return; }
   if (t.classList && t.classList.contains('sticky-text')) {
     const s = stickyOf(t); if (!s) return;
+    if (s.locked) { const u = unlocked.get(s.id); if (u) { u.text = t.innerText.replace(/\n$/, ''); u.dirty = true; clearTimeout(u.timer); u.timer = setTimeout(() => sealSticky(s), 600); } return; }
     s.text = t.innerText.replace(/\n$/, '');
     touch(curPg()); H().save(); return;
   }
@@ -1058,6 +1081,7 @@ document.addEventListener('keydown', (e) => {
     if (lightbox) { closeLightbox(); return; }
     if ($('.menu')) { closeMenu(); return; }
     if (ns.tool !== 'type') { setTool('type'); return; }
+    if (tblBar) hideTblBar();
     if (document.activeElement && document.activeElement.classList.contains('sticky-text')) document.activeElement.blur();
   }
   if (e.target.id === 'page-title' && e.key === 'Enter') { e.preventDefault(); placeCaret($('#page-body')); }
@@ -1167,6 +1191,7 @@ function openMenu(btn, kind) {
   closeMenu();
   const pg = curPg(), nb = curNb();
   const customs = D().noteTemplates || [];
+  if (kind === 'tools') { const r = btn.getBoundingClientRect(); ctxMenu(toolsMenuItems(), r.left, r.bottom + 6); return; }
   if (kind === 'more') {
     const r = btn.getBoundingClientRect();
     const extra = [
@@ -1212,7 +1237,7 @@ function setTool(t) {
   const page = $('#page');
   if (page) {
     page.classList.toggle('inking', t !== 'type');
-    ['pencil', 'hl', 'eraser'].forEach(x => page.classList.toggle('tool-' + x, t === x));
+    ['pencil', 'hl', 'eraser', 'shape'].forEach(x => page.classList.toggle('tool-' + x, t === x));
     const body = $('#page-body'); if (body) body.contentEditable = t === 'type' ? 'true' : 'false';
   }
   renderToolbarOnly();
@@ -1238,15 +1263,17 @@ function deskTopHtml(nb, pg, idx, pages) {
       <div class="tools">
         ${nb.kind !== 'journal' ? `<button class="btn sm" data-act="menu" data-menu="newpage">${icon('plus', 'sm')}Page</button>` : `<button class="btn sm" data-act="journal-today">${icon('calendar', 'sm')}Today</button>`}
         ${pg ? `<button class="btn sm sticky-btn" data-act="sticky-add" title="Add a sticky note">${icon('sticky', 'sm')}Sticky</button>
-        <button class="icon-btn" data-act="checklist-add" title="Insert a checklist (or type [] at the start of a line)">${icon('checklist', 'sm')}</button>
+        <button class="btn sm tools-btn ${tool === 'shape' ? 'on' : ''}" data-act="menu" data-menu="tools" title="Tables, shapes, videos, locked notes and more">${icon('tools', 'sm')}Tools</button>
         <div class="seg tool-seg">
-          <button data-act="tool" data-v="type" class="${tool === 'type' ? 'on' : ''}" title="Write">Aa</button>
+          <button data-act="tool" data-v="type" class="${tool === 'type' || tool === 'shape' ? 'on' : ''}" title="Write">Aa</button>
           <button data-act="tool" data-v="pencil" class="${tool === 'pencil' ? 'on' : ''}" title="Pencil">${icon('pencil', 'sm')}</button>
           <button data-act="tool" data-v="hl" class="${tool === 'hl' ? 'on' : ''}" title="Highlighter">${icon('highlighter', 'sm')}</button>
           <button data-act="tool" data-v="eraser" class="${tool === 'eraser' ? 'on' : ''}" title="Rubber">${icon('eraser', 'sm')}</button>
         </div>
         ${tool === 'pencil' ? `<div class="pens">${Object.keys(PENS).map(k => `<button class="pen ${ns.pen === k ? 'on' : ''}" style="--c:${PENS[k]}" data-act="pen" data-v="${k}" title="${k}"></button>`).join('')}</div>` : ''}
-        ${tool !== 'type' ? `<button class="icon-btn" data-act="ink-undo" title="Undo last stroke">${icon('undo', 'sm')}</button>` : ''}` : ''}
+        ${tool === 'shape' ? `<span class="shape-hint">${icon(SHAPES[ns.shape]?.ic || 'shapes', 'sm')} Drag on the page to draw a ${esc((SHAPES[ns.shape] || {}).name || 'shape').toLowerCase()} <button class="link" data-act="tool" data-v="type">Done</button></span>` : ''}
+        ${tool !== 'type' && tool !== 'shape' ? `<button class="icon-btn" data-act="ink-undo" title="Undo last stroke">${icon('undo', 'sm')}</button>` : ''}` : ''}
+        <button class="icon-btn" data-act="room" title="More room: hide the menus (again to bring them back)">${icon(H().D.settings.navCollapsed && ns.shelfHidden ? 'collapse' : 'expand', 'sm')}</button>
         <button class="icon-btn" data-act="menu" data-menu="more" title="More">${icon('dots', 'sm')}</button>
       </div>
     </div>`;
@@ -1272,6 +1299,7 @@ function printHtml(nb, pages, title) {
       <div class="page-body">${body}</div>
       ${inkImage(pg, W, h)}
       <div class="photos">${(pg.images || []).map(photoHtml).join('')}</div>
+      <svg class="shapes" width="${W}" height="${h}">${(pg.shapes || []).map(sh => shapeSvg(sh, W)).join('')}</svg>
       <div class="stickies">${(pg.stickies || []).map(s => stickyHtml(s).replace(/<div class="sticky-tools">[\s\S]*?<\/div>\s*<\/div>$/, '</div>').replace('contenteditable="true"', '')).join('')}</div>
       <footer class="page-num">— ${i + 1} —</footer></article>`;
   }).join('');
@@ -1433,6 +1461,15 @@ const actions = {
   },
   'st-del': (el) => removeSticky(el.closest('.sticky')),
   'img-del': (el) => removePicture(el.closest('.photo')),
+  'st-unlock': (el) => askUnlock(el.closest('.sticky')),
+  'st-lock': (el) => { const s = stickyOf(el); if (s) { sealSticky(s, true); } },
+  'room': () => {
+    const st = H().D.settings;
+    const both = st.navCollapsed && ns.shelfHidden;
+    if (both) { if (!ns.roomPrev || !ns.roomPrev.nav) H().setNav(false); if (!ns.roomPrev || !ns.roomPrev.shelf) { ns.shelfHidden = false; $('#notes')?.classList.remove('shelf-hidden'); } }
+    else { ns.roomPrev = { nav: st.navCollapsed, shelf: ns.shelfHidden }; H().setNav(true); ns.shelfHidden = true; $('#notes')?.classList.add('shelf-hidden'); }
+    persist(); renderToolbarOnly();
+  },
   'shelf-toggle': () => toggleShelf(),
   'chap-toggle': (el) => {
     const nb = getNb(el.dataset.nb); const c = (nb.chapters || []).find(x => x.id === el.dataset.chap); if (!c) return;
@@ -1449,6 +1486,397 @@ const actions = {
   'pdf-page': () => { closeMenu(); exportPdf('page'); },
   'pdf-notebook': () => { closeMenu(); exportPdf('notebook'); }
 };
+
+// ================================================================== TOOLS: tables, shapes, videos, locked notes, stamps
+const SHAPES = {
+  line: { name: 'Line', ic: 'divider' }, arrow: { name: 'Arrow', ic: 'arrowRight' }, darrow: { name: 'Double arrow', ic: 'arrowRight' },
+  elbow: { name: 'Elbow connector', ic: 'chevronR' }, elbowa: { name: 'Elbow arrow', ic: 'chevronR' }, elbowd: { name: 'Elbow, both ends', ic: 'chevronR' },
+  rect: { name: 'Rectangle', ic: 'stop' }, ellipse: { name: 'Ellipse', ic: 'target' }, para: { name: 'Parallelogram', ic: 'stop' },
+  tri: { name: 'Triangle', ic: 'shapes' }, diamond: { name: 'Diamond', ic: 'stop' }
+};
+const SHAPE_COLOURS = { graphite: '#3A3A3D', red: '#C0463A', blue: '#3E6C8A', green: '#5B8A4A', orange: '#D98A2B' };
+function toolsMenuItems() {
+  const pg = curPg();
+  const sz = [[2, 2], [3, 2], [3, 3], [4, 3], [4, 4], [5, 5]];
+  return [
+    { header: 'Add to this page' },
+    { label: 'Table', ic: 'table', sub: [{ header: 'Columns × rows' }, ...sz.map(([c, r]) => ({ label: `${c} × ${r}`, ic: 'table', fn: () => insertTable(c, r) }))] },
+    { label: 'Checklist', ic: 'checklist', fn: () => actions['checklist-add']() },
+    { label: 'Shapes & arrows', ic: 'shapes', sub: [
+      { header: 'Lines' }, ...['line', 'arrow', 'darrow', 'elbow', 'elbowa', 'elbowd'].map(k => ({ label: SHAPES[k].name, ic: 'pencil', fn: () => startShape(k) })),
+      '-', { header: 'Basic shapes' }, ...['rect', 'ellipse', 'para', 'tri', 'diamond'].map(k => ({ label: SHAPES[k].name, ic: 'shapes', fn: () => startShape(k) }))
+    ] },
+    { label: 'Video', ic: 'video', sub: [
+      { label: 'From a link (YouTube or video URL)…', ic: 'link', fn: () => askVideoLink() },
+      { label: 'From a file on this PC…', ic: 'upload', fn: () => pickVideoFile() }
+    ] },
+    { label: 'Picture from a file…', ic: 'image', fn: () => pickPicture() },
+    '-',
+    { label: 'Locked sticky note (password)', ic: 'lock', fn: () => addLockedSticky() },
+    { label: "Today's date stamp", ic: 'stamp', fn: () => insertStamp() },
+    { label: 'Divider line', ic: 'divider', fn: () => insertDivider() },
+    pg && (pg.shapes || []).length ? '-' : null,
+    pg && (pg.shapes || []).length ? { label: 'Clear all shapes on this page', ic: 'trash', danger: true, fn: () => { const snap = H().snapshot(); pg.shapes = []; touch(pg); H().save(); renderShapes(); H().undoable('Shapes cleared', snap, 'trash'); } } : null
+  ];
+}
+function caretBlock() {
+  const body = $('#page-body'); const sel = getSelection();
+  let blk = sel.rangeCount && body.contains(sel.anchorNode) ? topBlock(sel.anchorNode) : null;
+  if (!blk) { blk = body.lastElementChild && !body.lastElementChild.textContent.trim() && body.lastElementChild.tagName === 'DIV' ? body.lastElementChild : null; }
+  if (!blk) { blk = emptyLine(); body.appendChild(blk); }
+  return blk;
+}
+function insertBlock(node) {
+  if (ns.tool !== 'type') setTool('type');
+  const body = $('#page-body'); if (!body) return null;
+  const blk = caretBlock();
+  const empty = !blk.textContent.trim() && !blk.querySelector('img,table,hr,.stamp');
+  if (empty && blk.tagName === 'DIV') blk.replaceWith(node); else blk.after(node);
+  const after = emptyLine(); node.after(after);
+  return after;
+}
+function insertTable(cols, rows) {
+  const t = document.createElement('table'); t.className = 'ntable';
+  const tb = document.createElement('tbody');
+  for (let r = 0; r < rows; r++) { const tr = document.createElement('tr'); for (let c = 0; c < cols; c++) { const td = document.createElement('td'); td.appendChild(document.createElement('br')); tr.appendChild(td); } tb.appendChild(tr); }
+  t.appendChild(tb);
+  insertBlock(t);
+  const first = t.querySelector('td'); const r = document.createRange(); r.setStart(first, 0); r.collapse(true);
+  const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  $('#page-body').focus();
+  bodyChanged(); window.Sound && Sound.play('tap');
+}
+function insertStamp() {
+  const d = new Date();
+  const span = document.createElement('span'); span.className = 'stamp'; span.contentEditable = 'false';
+  span.textContent = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) + ' · ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  if (ns.tool !== 'type') setTool('type');
+  const body = $('#page-body'); const sel = getSelection();
+  if (!sel.rangeCount || !body.contains(sel.anchorNode)) placeCaret(body);
+  const frag = document.createDocumentFragment(); frag.appendChild(span); frag.appendChild(document.createTextNode(' '));
+  insertAtCaret(frag); bodyChanged(); window.Sound && Sound.play('stick');
+}
+function insertDivider() {
+  const hr = document.createElement('hr'); hr.className = 'ndiv';
+  const after = insertBlock(hr);
+  const r = document.createRange(); r.setStart(after, 0); r.collapse(true); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  bodyChanged();
+}
+// table helper bar: shows while the caret is in a table
+let tblBar = null, tblFor = null;
+function hideTblBar() { if (tblBar) { tblBar.remove(); tblBar = null; tblFor = null; } }
+function cellOf(node) { const el = node && (node.nodeType === 1 ? node : node.parentElement); return el && el.closest && el.closest('#page-body table.ntable td'); }
+document.addEventListener('selectionchange', () => {
+  const sel = getSelection(); const td = sel.rangeCount ? cellOf(sel.anchorNode) : null;
+  if (!td) { hideTblBar(); return; }
+  const table = td.closest('table');
+  if (tblFor !== table) {
+    hideTblBar(); tblFor = table;
+    tblBar = document.createElement('div'); tblBar.className = 'tbl-bar';
+    tblBar.innerHTML = [['row', 'plus', 'Row'], ['col', 'plus', 'Column'], ['delrow', 'x', 'Row'], ['delcol', 'x', 'Column'], ['deltable', 'trash', 'Table']]
+      .map(([a, ic, l]) => `<button data-tb="${a}" title="${a.startsWith('del') ? 'Remove' : 'Add'} ${l.toLowerCase()}">${icon(ic, 'sm')}${l}</button>`).join('');
+    document.body.appendChild(tblBar);
+  }
+  const r = table.getBoundingClientRect();
+  tblBar.style.left = Math.max(8, r.left) + 'px'; tblBar.style.top = Math.max(8, r.top - 40) + 'px';
+});
+document.addEventListener('mousedown', (e) => {
+  const b = e.target.closest && e.target.closest('.tbl-bar button'); if (!b) return;
+  e.preventDefault();
+  const sel = getSelection(); const td = sel.rangeCount ? cellOf(sel.anchorNode) : null; if (!td) return;
+  const tr = td.parentElement, table = td.closest('table'), ci = [...tr.children].indexOf(td);
+  const cell = () => { const c = document.createElement('td'); c.appendChild(document.createElement('br')); return c; };
+  const a = b.dataset.tb;
+  if (a === 'row') { const n = document.createElement('tr'); [...tr.children].forEach(() => n.appendChild(cell())); tr.after(n); }
+  if (a === 'col') $$('tr', table).forEach(row => { const ref = row.children[ci]; ref ? ref.after(cell()) : row.appendChild(cell()); });
+  if (a === 'delrow') { if (table.rows.length > 1) tr.remove(); else { table.remove(); hideTblBar(); } }
+  if (a === 'delcol') { if (tr.children.length > 1) $$('tr', table).forEach(row => row.children[ci] && row.children[ci].remove()); else { table.remove(); hideTblBar(); } }
+  if (a === 'deltable') { table.remove(); hideTblBar(); }
+  bodyChanged();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Tab') return;
+  const sel = getSelection(); const td = sel.rangeCount ? cellOf(sel.anchorNode) : null; if (!td) return;
+  e.preventDefault();
+  const cells = $$('td', td.closest('table')); let i = cells.indexOf(td) + (e.shiftKey ? -1 : 1);
+  if (i >= cells.length) { const tr = td.parentElement, n = document.createElement('tr'); [...tr.children].forEach(() => { const c = document.createElement('td'); c.appendChild(document.createElement('br')); n.appendChild(c); }); tr.closest('tbody').appendChild(n); bodyChanged(); }
+  const all = $$('td', td.closest('table')); const target = all[Math.max(0, Math.min(all.length - 1, i))];
+  const r = document.createRange(); r.selectNodeContents(target); r.collapse(false); sel.removeAllRanges(); sel.addRange(r);
+});
+
+// ---------- videos & pictures from files
+function ytEmbed(raw) {
+  let u; try { u = new URL(String(raw).trim()); } catch (e) { return null; }
+  const host = u.hostname.replace(/^www\.|^m\./, '');
+  let id = null;
+  if (host === 'youtu.be') id = u.pathname.slice(1).split('/')[0];
+  else if (/(^|\.)youtube(-nocookie)?\.com$/.test(host)) { id = u.searchParams.get('v'); const m = u.pathname.match(/^\/(?:live|shorts|embed|v)\/([\w-]{6,})/); if (!id && m) id = m[1]; }
+  return id ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0&modestbranding=1&playsinline=1` : null;
+}
+function addMedia(item) {
+  const pg = curPg(), page = $('#page'), desk = $('#desk'); if (!pg || !page) return;
+  const pw = page.clientWidth;
+  const w = Math.round(Math.min(520, pw * .65));
+  const y = Math.max(90, desk.scrollTop - page.offsetTop + 140);
+  const im = { id: nid('im'), x: +((pw - w) / 2 / pw * 100).toFixed(2), y: Math.round(y), w, rot: 0, ...item };
+  pg.images = pg.images || []; pg.images.push(im);
+  touch(pg); H().save();
+  $('#photos').insertAdjacentHTML('beforeend', photoHtml(im));
+  const el = $('#photos').lastElementChild;
+  if (!REDUCED) el.animate([{ opacity: 0, transform: 'translateY(-20px) scale(.98)' }, { opacity: 1, transform: 'none' }], { duration: 420, easing: H().EASE });
+  window.Sound && Sound.play('stick');
+  fitPage();
+}
+function promptBox({ title, label, placeholder, okLabel = 'Add', password = false, confirm = false, note = '' }) {
+  return new Promise((res) => {
+    const wrap = document.createElement('div'); wrap.className = 'prompt-wrap';
+    wrap.innerHTML = `<div class="scrim"></div><div class="modal prompt-modal" role="dialog">
+      <div class="modal-head"><h2>${esc(title)}</h2>${note ? `<p>${esc(note)}</p>` : ''}</div>
+      <div class="modal-body"><div class="field"><label>${esc(label)}</label><input class="input" id="pb-1" type="${password ? 'password' : 'text'}" placeholder="${esc(placeholder || '')}" autocomplete="off"></div>
+        ${confirm ? `<div class="field"><label>Type it again</label><input class="input" id="pb-2" type="password" autocomplete="off"></div>` : ''}
+        <div class="pb-err" id="pb-err"></div></div>
+      <div class="modal-foot"><button class="btn ghost" data-pb="no">Cancel</button><button class="btn primary" data-pb="ok">${esc(okLabel)}</button></div></div>`;
+    document.body.appendChild(wrap);
+    const i1 = wrap.querySelector('#pb-1'), i2 = wrap.querySelector('#pb-2'), err = wrap.querySelector('#pb-err');
+    setTimeout(() => i1.focus(), 40);
+    const done = (v) => { wrap.querySelector('.modal').classList.add('out'); wrap.querySelector('.scrim').classList.add('out'); setTimeout(() => wrap.remove(), 260); res(v); };
+    const ok = () => {
+      const v = i1.value;
+      if (!v.trim()) { i1.focus(); return; }
+      if (confirm && v !== i2.value) { err.textContent = "Those don't match. Try again."; i2.value = ''; i2.focus(); return; }
+      done(v);
+    };
+    wrap.addEventListener('click', (e) => { const b = e.target.closest('[data-pb]'); if (b) b.dataset.pb === 'ok' ? ok() : done(null); else if (e.target.classList.contains('scrim')) done(null); });
+    wrap.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') { if (confirm && document.activeElement === i1) { i2.focus(); return; } ok(); } if (e.key === 'Escape') done(null); });
+    wrap.showError = (m) => { err.textContent = m; };
+  });
+}
+async function askVideoLink() {
+  const v = await promptBox({ title: 'Add a video', label: 'Video link', placeholder: 'https://www.youtube.com/watch?v=… or a link to an .mp4', note: 'YouTube links play right on the page. Direct links to video files work too.' });
+  if (!v) return;
+  const yt = ytEmbed(v);
+  if (yt) { addMedia({ kind: 'yt', src: yt, label: 'YouTube' }); return; }
+  try { const u = new URL(v.trim()); if (!/^https?:$/.test(u.protocol)) throw 0; addMedia({ kind: 'video', src: u.href, label: decodeURIComponent(u.pathname.split('/').pop() || 'Video').slice(0, 40) }); }
+  catch (e) { H().toast('That doesn\'t look like a link', { ic: 'link' }); }
+}
+async function pickVideoFile() {
+  if (!H().api.pickVideo) { H().toast('Adding videos from files works in the desktop app', { ic: 'video' }); return; }
+  const r = await H().api.pickVideo(); if (!r) return;
+  addMedia({ kind: 'video', src: r.src, label: r.name.slice(0, 40) });
+}
+function pickPicture() {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
+  inp.onchange = () => { if (inp.files.length) { const page = $('#page'); const r = page.getBoundingClientRect(); insertImages([...inp.files], { x: r.left + r.width / 2, y: Math.max(r.top + 200, 260) }); } };
+  inp.click();
+}
+
+// ---------- password-protected stickies (AES-GCM, key from your password; nothing readable is saved)
+const unlocked = new Map(); // sticky id → { text, key }
+const b64 = { to: (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))), from: (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0)) };
+async function deriveKey(pw, salt) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 200000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+async function encryptText(text, key, salt) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(text));
+  return { salt: b64.to(salt), iv: b64.to(iv), data: b64.to(data) };
+}
+async function addLockedSticky() {
+  const pw = await promptBox({ title: 'New locked note', label: 'Choose a password', password: true, confirm: true, okLabel: 'Create', note: 'Only someone with this password can read the note. There is no way to recover it if forgotten.' });
+  if (!pw) return;
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await deriveKey(pw, salt);
+  addSticky();
+  const pg = curPg(); const s = pg.stickies[pg.stickies.length - 1];
+  s.locked = true; s.color = 'blue'; s.text = '';
+  s.enc = await encryptText('', key, salt);
+  unlocked.set(s.id, { text: '', key, salt });
+  touch(pg); H().save();
+  rerenderSticky(s, true);
+}
+function rerenderSticky(s, focus) {
+  const old = $(`#stickies .sticky[data-sid="${s.id}"]`); if (!old) return;
+  const tmp = document.createElement('div'); tmp.innerHTML = stickyHtml(s); const fresh = tmp.firstElementChild;
+  old.replaceWith(fresh);
+  if (focus) setTimeout(() => placeCaret(fresh.querySelector('.sticky-text')), 30);
+}
+async function askUnlock(el) {
+  const s = stickyOf(el); if (!s || !s.enc) return;
+  const pw = await promptBox({ title: 'Unlock note', label: 'Password', password: true, okLabel: 'Unlock' });
+  if (!pw) return;
+  try {
+    const salt = b64.from(s.enc.salt);
+    const key = await deriveKey(pw, salt);
+    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64.from(s.enc.iv) }, key, b64.from(s.enc.data));
+    unlocked.set(s.id, { text: new TextDecoder().decode(plain), key, salt });
+    rerenderSticky(s, true);
+    window.Sound && Sound.play('pop');
+  } catch (e) {
+    H().toast('That password is not right', { ic: 'lock' });
+    const n = $(`#stickies .sticky[data-sid="${s.id}"]`); if (n && !REDUCED) n.animate([{ transform: `rotate(${s.rot}deg) translateX(0)` }, { transform: `rotate(${s.rot}deg) translateX(-8px)` }, { transform: `rotate(${s.rot}deg) translateX(8px)` }, { transform: `rotate(${s.rot}deg) translateX(0)` }], { duration: 300 });
+  }
+}
+async function sealSticky(s, relock) {
+  const u = unlocked.get(s.id); if (!u) return;
+  clearTimeout(u.timer);
+  if (u.dirty || relock) { s.enc = await encryptText(u.text || '', u.key, u.salt); u.dirty = false; touch(curPg()); H().save(); }
+  if (relock) { unlocked.delete(s.id); rerenderSticky(s); window.Sound && Sound.play('tap'); }
+}
+function lockAll() {
+  const pg = curPg();
+  [...unlocked.keys()].forEach(id => { const s = pg && (pg.stickies || []).find(x => x.id === id); if (s) sealSticky(s, true); else unlocked.delete(id); });
+}
+
+// ---------- shapes
+let shapeDraft = null, selShape = null, shapeDrag = null;
+function startShape(kind) {
+  ns.shape = kind;
+  setTool('shape');
+  H().toast(`Drag on the page to draw a ${SHAPES[kind].name.toLowerCase()}`, { ic: 'shapes', timeout: 3000 });
+}
+function pxOf(sh, pw) { return { x1: sh.x1 / 100 * pw, y1: sh.y1, x2: sh.x2 / 100 * pw, y2: sh.y2 }; }
+function arrowHead(x, y, ang, size = 13) {
+  const a1 = ang + Math.PI - .45, a2 = ang + Math.PI + .45;
+  return `M${(x + size * Math.cos(a1)).toFixed(1)} ${(y + size * Math.sin(a1)).toFixed(1)} L${x.toFixed(1)} ${y.toFixed(1)} L${(x + size * Math.cos(a2)).toFixed(1)} ${(y + size * Math.sin(a2)).toFixed(1)}`;
+}
+function shapePath(sh, pw) {
+  const { x1, y1, x2, y2 } = pxOf(sh, pw);
+  const L = Math.min(x1, x2), R = Math.max(x1, x2), T = Math.min(y1, y2), B = Math.max(y1, y2), w = R - L, h = B - T;
+  const f = (n) => n.toFixed(1);
+  switch (sh.type) {
+    case 'line': return `M${f(x1)} ${f(y1)} L${f(x2)} ${f(y2)}`;
+    case 'arrow': { const a = Math.atan2(y2 - y1, x2 - x1); return `M${f(x1)} ${f(y1)} L${f(x2)} ${f(y2)} ` + arrowHead(x2, y2, a); }
+    case 'darrow': { const a = Math.atan2(y2 - y1, x2 - x1); return `M${f(x1)} ${f(y1)} L${f(x2)} ${f(y2)} ` + arrowHead(x2, y2, a) + ' ' + arrowHead(x1, y1, a + Math.PI); }
+    case 'elbow': case 'elbowa': case 'elbowd': {
+      let d = `M${f(x1)} ${f(y1)} L${f(x2)} ${f(y1)} L${f(x2)} ${f(y2)}`;
+      if (sh.type !== 'elbow' && Math.abs(y2 - y1) > 2) d += ' ' + arrowHead(x2, y2, y2 > y1 ? Math.PI / 2 : -Math.PI / 2);
+      if (sh.type === 'elbowd' && Math.abs(x2 - x1) > 2) d += ' ' + arrowHead(x1, y1, x2 > x1 ? Math.PI : 0);
+      return d;
+    }
+    case 'rect': return `M${f(L)} ${f(T)} H${f(R)} V${f(B)} H${f(L)} Z`;
+    case 'ellipse': { const rx = w / 2, ry = h / 2, cx = L + rx, cy = T + ry; return `M${f(cx - rx)} ${f(cy)} A${f(rx)} ${f(ry)} 0 1 0 ${f(cx + rx)} ${f(cy)} A${f(rx)} ${f(ry)} 0 1 0 ${f(cx - rx)} ${f(cy)} Z`; }
+    case 'para': { const k = Math.min(w * .25, h); return `M${f(L + k)} ${f(T)} H${f(R)} L${f(R - k)} ${f(B)} H${f(L)} Z`; }
+    case 'tri': return `M${f(L + w / 2)} ${f(T)} L${f(R)} ${f(B)} L${f(L)} ${f(B)} Z`;
+    case 'diamond': return `M${f(L + w / 2)} ${f(T)} L${f(R)} ${f(T + h / 2)} L${f(L + w / 2)} ${f(B)} L${f(L)} ${f(T + h / 2)} Z`;
+  }
+  return '';
+}
+function shapeSvg(sh, pw) {
+  const d = shapePath(sh, pw);
+  const c = SHAPE_COLOURS[sh.color] || sh.color || SHAPE_COLOURS.graphite;
+  return `<g class="shape" data-shid="${sh.id}"><path class="sh-hit" d="${d}"/><path class="sh-line" d="${d}" stroke="${c}" stroke-width="${sh.width || 2.4}"/></g>`;
+}
+function renderShapes() {
+  const sv = $('#shapes'), page = $('#page'), pg = curPg(); if (!sv || !page || !pg) return;
+  const pw = page.clientWidth;
+  sv.setAttribute('width', pw); sv.setAttribute('height', page.offsetHeight);
+  sv.dataset.r = '1';
+  sv.innerHTML = (pg.shapes || []).map(sh => shapeSvg(sh, pw)).join('') + (shapeDraft ? shapeSvg(shapeDraft, pw).replace('class="shape"', 'class="shape draft"') : '') + selHandles(pw);
+}
+function selHandles(pw) {
+  const pg = curPg(); const sh = selShape && (pg.shapes || []).find(x => x.id === selShape); if (!sh) return '';
+  const { x1, y1, x2, y2 } = pxOf(sh, pw);
+  return `<g class="shape-sel"><rect class="sel-box" x="${Math.min(x1, x2) - 6}" y="${Math.min(y1, y2) - 6}" width="${Math.abs(x2 - x1) + 12}" height="${Math.abs(y2 - y1) + 12}" rx="4"/>
+    <circle class="sel-h" data-h="1" cx="${x1}" cy="${y1}" r="7"/><circle class="sel-h" data-h="2" cx="${x2}" cy="${y2}" r="7"/></g>`;
+}
+const pagePt = (e) => { const r = $('#page').getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top, pw: r.width }; };
+function shapeDown(e) {
+  const p = pagePt(e);
+  shapeDraft = { id: nid('sh'), type: ns.shape || 'rect', x1: p.x / p.pw * 100, y1: p.y, x2: p.x / p.pw * 100, y2: p.y, color: ns.shapeColor || 'red', width: 2.4 };
+  renderShapes();
+}
+function shapeMove(e) {
+  if (!shapeDraft) return;
+  const p = pagePt(e);
+  let x = p.x, y = p.y;
+  if (e.shiftKey) { // keep it square / straight
+    const sx = shapeDraft.x1 / 100 * p.pw, sy = shapeDraft.y1;
+    if (['line', 'arrow', 'darrow'].includes(shapeDraft.type)) { if (Math.abs(x - sx) > Math.abs(y - sy)) y = sy; else x = sx; }
+    else { const d = Math.max(Math.abs(x - sx), Math.abs(y - sy)); x = sx + Math.sign(x - sx || 1) * d; y = sy + Math.sign(y - sy || 1) * d; }
+  }
+  shapeDraft.x2 = x / p.pw * 100; shapeDraft.y2 = y;
+  renderShapes();
+}
+function shapeUp(e) {
+  const pg = curPg(); const sh = shapeDraft; shapeDraft = null; if (!sh || !pg) return;
+  const pw = $('#page').clientWidth;
+  if (Math.hypot((sh.x2 - sh.x1) / 100 * pw, sh.y2 - sh.y1) < 8) { // a click: drop a default-sized shape
+    const lineish = ['line', 'arrow', 'darrow'].includes(sh.type);
+    sh.x2 = sh.x1 + (lineish ? 140 : 150) / pw * 100; sh.y2 = sh.y1 + (lineish ? 0 : 90);
+  }
+  pg.shapes = pg.shapes || []; pg.shapes.push(sh);
+  touch(pg); H().save();
+  setTool('type');
+  selectShape(sh.id);
+  window.Sound && Sound.play('tap');
+  fitPage();
+}
+let shBar = null;
+function selectShape(id) {
+  selShape = id;
+  if (shBar) { shBar.remove(); shBar = null; }
+  renderShapes();
+  const pg = curPg(); const sh = id && pg && (pg.shapes || []).find(x => x.id === id); if (!sh) return;
+  const page = $('#page'); const pr = page.getBoundingClientRect(); const pw = page.clientWidth;
+  const { x1, y1, x2, y2 } = pxOf(sh, pw);
+  shBar = document.createElement('div'); shBar.className = 'sel-bar';
+  shBar.innerHTML = Object.entries(SHAPE_COLOURS).map(([k, c]) => `<button class="pen ${sh.color === k ? 'on' : ''}" style="--c:${c}" data-shc="${k}" title="${k}"></button>`).join('') +
+    `<span class="sep"></span><button data-shw="1" title="Thin">${icon('divider', 'sm')}</button><button data-shw="3.6" class="thick" title="Thick">${icon('divider', 'sm')}</button><span class="sep"></span><button data-shdel="1" title="Delete (Del)">${icon('trash', 'sm')}</button>`;
+  page.appendChild(shBar);
+  shBar.style.left = Math.max(0, Math.min(x1, x2)) + 'px';
+  shBar.style.top = Math.max(0, Math.min(y1, y2) - 46) + 'px';
+}
+document.addEventListener('mousedown', (e) => {
+  const b = e.target.closest && e.target.closest('.sel-bar button'); if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  const pg = curPg(); const sh = (pg.shapes || []).find(x => x.id === selShape); if (!sh) return;
+  if (b.dataset.shc) { sh.color = b.dataset.shc; ns.shapeColor = sh.color; }
+  if (b.dataset.shw) sh.width = +b.dataset.shw === 1 ? 1.6 : 3.6;
+  if (b.dataset.shdel) { deleteShape(sh.id); return; }
+  touch(pg); H().save(); selectShape(sh.id);
+}, true);
+function deleteShape(id) {
+  const pg = curPg(); const snap = H().snapshot();
+  pg.shapes = (pg.shapes || []).filter(x => x.id !== id); touch(pg); H().save();
+  selectShape(null); H().undoable('Shape deleted', snap, 'trash');
+}
+// pick, move and reshape shapes (works in normal writing mode)
+document.addEventListener('pointerdown', (e) => {
+  const page = $('#page'); if (!page || ns.tool !== 'type' || e.button !== 0) return;
+  const g = e.target.closest && e.target.closest('#shapes .shape:not(.draft)');
+  const h = e.target.closest && e.target.closest('#shapes .sel-h');
+  if (!g && !h) { if (selShape && !(e.target.closest && e.target.closest('.sel-bar'))) selectShape(null); return; }
+  e.preventDefault(); e.stopPropagation();
+  const id = h ? selShape : g.dataset.shid;
+  if (!h && id !== selShape) selectShape(id);
+  const pg = curPg(); const sh = pg.shapes.find(x => x.id === id); if (!sh) return;
+  const p = pagePt(e);
+  shapeDrag = { id, mode: h ? 'h' + h.dataset.h : 'move', sx: p.x, sy: p.y, o: { ...sh }, pid: e.pointerId };
+}, true);
+document.addEventListener('pointermove', (e) => {
+  if (!shapeDrag || e.pointerId !== shapeDrag.pid) return;
+  const pg = curPg(); const sh = pg.shapes.find(x => x.id === shapeDrag.id); if (!sh) return;
+  const p = pagePt(e); const dx = (p.x - shapeDrag.sx) / p.pw * 100, dy = p.y - shapeDrag.sy; const o = shapeDrag.o;
+  if (shapeDrag.mode === 'move') { sh.x1 = o.x1 + dx; sh.x2 = o.x2 + dx; sh.y1 = o.y1 + dy; sh.y2 = o.y2 + dy; }
+  else if (shapeDrag.mode === 'h1') { sh.x1 = o.x1 + dx; sh.y1 = o.y1 + dy; }
+  else { sh.x2 = o.x2 + dx; sh.y2 = o.y2 + dy; }
+  shapeDrag.moved = true;
+  if (shBar) shBar.style.opacity = 0;
+  renderShapes();
+});
+document.addEventListener('pointerup', (e) => {
+  if (!shapeDrag || e.pointerId !== shapeDrag.pid) return;
+  const d = shapeDrag; shapeDrag = null;
+  if (d.moved) { touch(curPg()); H().save(); fitPage(); }
+  selectShape(d.id);
+});
+document.addEventListener('keydown', (e) => {
+  if (!selShape || H().state.view !== 'notes') return;
+  const typing = /INPUT|TEXTAREA/.test(e.target.tagName) || e.target.isContentEditable;
+  if ((e.key === 'Delete' || (e.key === 'Backspace' && !typing))) { e.preventDefault(); deleteShape(selShape); }
+  if (e.key === 'Escape') selectShape(null);
+});
 
 // ================================================================== CONTEXT MENUS, CHAPTERS, PAGE ORGANISING
 function ctxMenu(items, x, y, opts = {}) {
@@ -1845,5 +2273,5 @@ function external() {
   }
 }
 
-window.Notes = { view, mount, light, leave, actions, open, openJournal, journalWrap, deskCard, createForProject, external };
+window.Notes = { ctxMenu, view, mount, light, leave, actions, open, openJournal, journalWrap, deskCard, createForProject, external };
 })();
