@@ -357,3 +357,22 @@ html.nav-collapsed .clock-widget .meta, html.nav-collapsed .clock-widget .mini-b
 :root[data-theme="dark"][data-season="summer"] { --accent: #5DB1E3; --accent-soft: #1F3747; --accent-ink: #0D1C26; --sage: #5CC3B5; --honey: #F1A65A; --bg: #181E22; --bg-deep: #13181B; --surface: #20282D; --surface-2: #283238; --line: #34424A; --line-strong: #44545E; }
 :root[data-season="spring"] .brand-name, :root[data-season="summer"] .brand-name { color: var(--text); }
 :root[data-season="summer"] .page-head h1 em, :root[data-season="spring"] .page-head h1 em { color: var(--accent); }
+
+/* ---------------------------------------------------------------- 1.5: break clock reset + hideable widgets */
+.ring-wrap { position: relative; flex: none; display: grid; place-items: center; }
+.ring-reset {
+  position: absolute; inset: 0; margin: auto; width: 26px; height: 26px; border-radius: 50%; border: 0; padding: 0;
+  display: grid; place-items: center; background: transparent; color: var(--text-3); cursor: pointer;
+  transition: background .2s, color .2s, transform .25s var(--ease-spring, ease);
+}
+.ring-reset svg { width: 15px; height: 15px; }
+.big .ring-reset { width: 34px; height: 34px; }
+.big .ring-reset svg { width: 18px; height: 18px; }
+.ring-reset:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); transform: scale(1.08); }
+.ring-reset:active { transform: scale(.94); }
+.ring-reset:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.widgets-hidden { display: inline-flex; align-items: center; gap: 6px; align-self: center; font-size: 12.5px; color: var(--text-3); margin-top: 2px; }
+.widgets-hidden:hover { color: var(--accent); }
+.nav-row .nm small { display: block; font-size: 11.5px; font-weight: 500; color: var(--text-3); line-height: 1.3; }
+#set-widgets.flash { animation: setFlash 1.4s var(--ease, ease) 1; }
+@keyframes setFlash { 0%, 100% { box-shadow: var(--shadow-sm); } 30% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent); } }

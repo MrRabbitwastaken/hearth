@@ -31,7 +31,7 @@ function defaultData() {
       wrapTime: '17:00', focusMinutes: 25, launchAtStartup: true, closeToTray: true,
       staleProjectDays: 7, hotkey: 'CommandOrControl+Alt+Space', theme: 'light',
       nav: { hidden: [], order: [] },
-      season: 'auto', seasonFx: false, noteFont: 'auto', fxDefaultV2: true, customSounds: [], soundSources: {},
+      season: 'auto', seasonFx: false, noteFont: 'auto', hiddenWidgets: [], fxDefaultV2: true, customSounds: [], soundSources: {},
       sounds: true, volume: 0.6,
       ambient: 'rain', ambientAuto: true, ambientVolume: 0.5, focusShield: true, dnd: true,
       waterOn: true, waterEvery: 90, waterGoal: 8, postureOn: true, postureEvery: 45,
@@ -412,7 +412,7 @@ function updateSidebar() {
           <button class="icon-btn danger" data-act="focus-stop" title="Stop">${icon('stop', 'sm')}</button>
         </div></div>` : ''}
       <div class="clock-widget" title="Screen-break clock — it pauses when you lock your PC or step away">
-        ${ring(42, 4, 0, { live: 'brk-ring' })}
+        <div class="ring-wrap">${ring(42, 4, 0, { live: 'brk-ring' })}<button class="ring-reset" data-act="brk-reset" title="Reset the break clock">${icon('reset', 'sm')}</button></div>
         <div class="meta"><div class="label">Next break</div><div class="value" data-live="brk-text">--</div><div class="sub" data-live="brk-sub">On screen 0m</div></div>
       </div>`;
   }
@@ -584,22 +584,49 @@ function viewToday() {
       </div>
 
       <aside class="side-col">
-        ${window.Notes.deskCard()}
-        ${scoreCard(sc, stk)}
-        ${breakCard()}
-        ${focusCard()}
-        ${waterCard()}
-        ${waitingMini()}
-        ${projectsMini()}
+        ${widgetOn('desk') ? window.Notes.deskCard() : ''}
+        ${widgetOn('score') ? scoreCard(sc, stk) : ''}
+        ${widgetOn('break') ? breakCard() : ''}
+        ${widgetOn('focus') || D.meta.focus ? focusCard() : ''}
+        ${widgetOn('water') ? waterCard() : ''}
+        ${widgetOn('waiting') ? waitingMini() : ''}
+        ${widgetOn('projects') ? projectsMini() : ''}
+        ${(D.settings.hiddenWidgets || []).length ? `<button class="link widgets-hidden" data-act="widgets-manage">${icon('eye', 'sm')} ${plural(D.settings.hiddenWidgets.length, 'hidden widget')}</button>` : ''}
       </aside>
     </div>
   </div>`;
 }
 
+// Today's side widgets: right-click one to hide it; Settings brings them back
+const WIDGETS = {
+  desk: { k: 'c-desk', name: 'On your desk', ic: 'sticky', sub: 'Sticky notes you pinned from a notebook' },
+  score: { k: 'c-score', name: 'Good-day score', ic: 'sparkle', sub: 'Your score and streak' },
+  break: { k: 'c-break', name: 'Screen break', ic: 'eye', sub: 'The break clock card (the small clock bottom left stays)' },
+  focus: { k: 'c-focus', name: 'Focus mode', ic: 'target', sub: 'Timers and soundscapes. Still shows while a focus session runs' },
+  water: { k: 'c-water', name: 'Water', ic: 'drop', sub: 'The glass tracker' },
+  waiting: { k: 'c-wait', name: 'Time to chase', ic: 'hand', sub: 'Waiting-on items that are due' },
+  projects: { k: 'c-proj', name: 'Projects', ic: 'folder', sub: 'Your active projects' }
+};
+const widgetOn = (id) => !(D.settings.hiddenWidgets || []).includes(id);
+function setWidget(id, on) {
+  const h = new Set(D.settings.hiddenWidgets || []);
+  on ? h.delete(id) : h.add(id);
+  D.settings.hiddenWidgets = [...h];
+  save(); refresh();
+}
+function widgetMenu(id, x, y) {
+  const w = WIDGETS[id]; if (!w) return;
+  const items = [{ header: w.name },
+    { label: 'Hide this widget', ic: 'eyeOff', fn: () => { setWidget(id, false); toast(`${w.name} hidden. Bring it back in Settings.`, { ic: 'eye', action: { label: 'Undo', fn: () => setWidget(id, true) } }); } }];
+  if (id === 'water' && D.settings.waterOn !== false) items.push({ label: 'Turn off water nudges too', ic: 'bellOff', fn: () => { D.settings.waterOn = false; setWidget(id, false); toast('Water tracking and nudges are off. Turn them back on in Settings.', { ic: 'drop' }); } });
+  items.push('-', { label: 'Choose widgets…', ic: 'sliders', fn: () => actions['widgets-manage']() });
+  window.Notes.ctxMenu(items, x, y);
+}
+
 function breakCard() {
   return `<div class="card break-card glow" data-k="c-break">
     <h3>${icon('eye', 'sm')} Screen break</h3>
-    <div class="big">${ring(64, 6, 0, { live: 'brk-ring' })}
+    <div class="big"><div class="ring-wrap">${ring(64, 6, 0, { live: 'brk-ring' })}<button class="ring-reset" data-act="brk-reset" title="Reset the break clock">${icon('reset', 'sm')}</button></div>
       <div><div class="num" data-live="brk-num">--</div><div class="cap" data-live="brk-sub">On screen 0m</div></div></div>
     <div class="row">
       <button class="btn sm primary" data-act="brk-now">${icon('coffee', 'sm')}Break now</button>
@@ -1108,6 +1135,12 @@ function viewSettings() {
           <button class="icon-btn mini" data-act="nav-move" data-v="${id}" data-dir="-1" title="Move up" ${i === 0 ? 'disabled' : ''}>${icon('chevronUp', 'sm')}</button>
           <button class="icon-btn mini" data-act="nav-move" data-v="${id}" data-dir="1" title="Move down" ${i === order.length - 1 ? 'disabled' : ''}>${icon('chevron', 'sm')}</button>
           <button class="switch ${hidden.includes(id) ? '' : 'on'}" data-act="nav-toggle" data-v="${id}" title="${hidden.includes(id) ? 'Show' : 'Hide'}"></button></div>`).join('')}</div></div>
+
+      <div class="card" id="set-widgets"><h3>${icon('sun', 'sm')} Today widgets</h3>
+        <div class="hint" style="margin-bottom:6px">Choose which cards show down the side of Today. You can also right-click a card there to hide it.</div>
+        <div class="nav-cust">${Object.entries(WIDGETS).map(([id, w]) => `<div class="nav-row ${widgetOn(id) ? '' : 'off'}" data-k="wr-${id}">
+          ${icon(w.ic, 'sm')}<span class="nm">${w.name}<small>${w.sub}</small></span>
+          <button class="switch ${widgetOn(id) ? 'on' : ''}" data-act="widget-toggle" data-v="${id}" title="${widgetOn(id) ? 'Hide' : 'Show'}"></button></div>`).join('')}</div></div>
 
       <div class="card"><h3>${icon('plus', 'sm')} Tasks & calendar</h3>
         <div class="set-row"><div class="t"><b>Smart quick-add</b><span>Understands dates and times ("fri 2pm", "tomorrow", "25/11"), #labels, !1–!3 priority and @project.</span></div>${sw('smartAdd')}</div>
@@ -1640,6 +1673,15 @@ const ACTIONS = {
   'modal-close': () => closeModal(),
 
   'brk-now': () => api.breakNow().then(() => openBreak()),
+  'brk-reset': (el) => {
+    const svg = el && el.querySelector('svg');
+    svg && svg.animate([{ transform: 'rotate(0)' }, { transform: 'rotate(-360deg)' }], { duration: 600, easing: 'cubic-bezier(.3,.7,.2,1)' });
+    api.breakTaken().then(setBreakStatus);
+    window.Sound && Sound.play('tick');
+    toast(`Break clock reset: next break in ${D.settings.breakInterval} min`, { ic: 'clock' });
+  },
+  'widgets-manage': () => { go('settings'); setTimeout(() => { const c = document.getElementById('set-widgets'); c && c.scrollIntoView({ behavior: 'smooth', block: 'center' }); c && c.classList.add('flash'); }, 450); },
+  'widget-toggle': (el) => setWidget(el.dataset.v, !widgetOn(el.dataset.v)),
   'brk-taken': () => { countBreak(); api.breakTaken().then(setBreakStatus); toast('Break logged. Clock reset.', { ic: 'coffee' }); },
   'brk-done': () => { countBreak(); closeBreak(); api.breakTaken().then(setBreakStatus); toast('Welcome back. Clock reset.', { ic: 'leaf' }); },
   'brk-snooze': () => { closeBreak(); api.breakSnooze().then(setBreakStatus); toast(`Snoozed for ${D.settings.snoozeMinutes} minutes`, { ic: 'clock' }); },
@@ -1915,6 +1957,11 @@ document.addEventListener('change', (e) => {
 });
 
 document.addEventListener('contextmenu', (e) => {
+  const card = e.target.closest && !e.target.closest('input, textarea, [contenteditable="true"], .amb') && e.target.closest('.side-col > .card[data-k]');
+  if (card) {
+    const id = Object.keys(WIDGETS).find(k => WIDGETS[k].k === card.dataset.k);
+    if (id) { e.preventDefault(); widgetMenu(id, e.clientX, e.clientY); return; }
+  }
   const b = e.target.closest && e.target.closest('.amb[data-v]');
   if (!b) return;
   e.preventDefault();
