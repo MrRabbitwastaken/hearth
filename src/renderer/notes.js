@@ -29,16 +29,29 @@ const notebooks = () => {
 };
 const getNb = (id) => D().notebooks.find(n => n.id === id);
 const getPg = (id) => D().pages.find(p => p.id === id);
+const byOrd = (a, b) => (a.order || 0) - (b.order || 0);
+function chaptersOf(nb) { return nb && nb.kind !== 'journal' ? (nb.chapters || []).slice().sort(byOrd) : []; }
+function chapterOf(nb, pg) { return pg.chapterId ? (nb.chapters || []).find(c => c.id === pg.chapterId) || null : null; }
+// display order: loose pages first, then each chapter's pages
 function pagesOf(nbId) {
   const nb = getNb(nbId);
   const list = D().pages.filter(p => p.notebookId === nbId);
   if (nb && nb.kind === 'journal') return list.sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.order - a.order);
-  return list.sort((a, b) => a.order - b.order);
+  const chaps = chaptersOf(nb);
+  const ids = new Set(chaps.map(c => c.id));
+  const loose = list.filter(p => !p.chapterId || !ids.has(p.chapterId)).sort(byOrd);
+  return loose.concat(...chaps.map(c => list.filter(p => p.chapterId === c.id).sort(byOrd)));
 }
+function groupOf(pg) {
+  const nb = getNb(pg.notebookId);
+  const ch = nb ? chapterOf(nb, pg) : null;
+  return pagesOf(pg.notebookId).filter(p => (ch ? p.chapterId === ch.id : !chapterOf(nb, p)));
+}
+function renumber(list) { list.forEach((p, i) => { p.order = i + 1; }); }
 const curNb = () => getNb(ns.nbId);
 const curPg = () => (ns.pgId ? getPg(ns.pgId) : null);
 function persist() {
-  D().meta.notes = { nbId: ns.nbId, pgId: ns.pgId, expanded: ns.expanded, tool: ns.tool, pen: ns.pen };
+  D().meta.notes = { nbId: ns.nbId, pgId: ns.pgId, expanded: ns.expanded, tool: ns.tool, pen: ns.pen, shelfHidden: !!ns.shelfHidden };
   H().save();
 }
 function touch(pg) {
@@ -83,6 +96,19 @@ const TEMPLATES = [
   { id: 'standup', name: 'Stand-up', ic: 'sun', title: 'Stand-up', html: (d) => `<p><b>${d}</b></p><h3>Yesterday</h3><ul>${E}</ul><h3>Today</h3><ul>${E}</ul><h3>Blockers</h3><ul>${E}</ul>` },
   { id: 'checklist', name: 'Checklist', ic: 'checklist', title: 'Checklist', html: () => `<ul class="checks">${E}</ul>` }
 ];
+function placeAfter(pg, ref) {
+  // put pg straight after ref, in ref's chapter
+  pg.chapterId = ref.chapterId || null;
+  const g = groupOf(ref).filter(p => p.id !== pg.id);
+  g.splice(g.indexOf(ref) + 1, 0, pg);
+  renumber(g);
+}
+function placeAtEnd(pg, nbId, chapterId) {
+  pg.notebookId = nbId; pg.chapterId = chapterId || null;
+  const nb = getNb(nbId);
+  const g = pagesOf(nbId).filter(p => p.id !== pg.id && (chapterId ? p.chapterId === chapterId : !chapterOf(nb, p)));
+  g.push(pg); renumber(g);
+}
 function createPage(nbId, template = 'blank', extra = {}) {
   const now = Date.now();
   const k = H().today();
@@ -150,7 +176,9 @@ function processActions(pg) {
 
 // ================================================================== VIEW
 function view() {
-  return `<div class="notes"><aside class="shelf" id="shelf"></aside><section class="desk" id="desk"></section></div>`;
+  const m = D().meta.notes || {};
+  if (ns.shelfHidden == null) ns.shelfHidden = !!m.shelfHidden;
+  return `<div class="notes ${ns.shelfHidden ? 'shelf-hidden' : ''}" id="notes"><aside class="shelf" id="shelf"></aside><section class="desk" id="desk"></section></div>`;
 }
 
 function mount() {
@@ -176,7 +204,8 @@ function light() {
 }
 
 function leave() {
-  commitEditor();
+  commitEditor(true);
+  closeLightbox();
   processActions(curPg());
   hideSelbar();
   closeMenu();
@@ -203,22 +232,36 @@ function renderShelf() {
     ns.justToggled = null;
   }
 }
+function pgRowHtml(nb, p, i) {
+  return `<button class="pg-row ${p.id === ns.pgId ? 'active' : ''}" data-act="pg-open" data-nb="${nb.id}" data-pg="${p.id}" data-drag-pg="${p.id}" title="Right-click for options">
+        <span class="pg-num">${nb.kind === 'journal' ? '' : i + 1}</span><span class="t">${esc(pageLabel(p, i))}</span>
+        ${p.bookmarked ? `<span class="rib-dot" style="--c:${nb.color}"></span>` : ''}${(p.stickies || []).length ? `<span class="st-dot" title="${p.stickies.length} sticky notes"></span>` : ''}${(p.images || []).length ? `<span class="im-dot" title="${p.images.length} pictures">${icon('image', 'sm')}</span>` : ''}</button>`;
+}
 function nbRow(nb) {
   const pages = pagesOf(nb.id);
   const open = !!ns.expanded[nb.id];
   const active = nb.id === ns.nbId;
   const ic = nb.kind === 'journal' ? 'calendar' : nb.kind === 'inbox' ? 'sticky' : 'book';
+  const chaps = chaptersOf(nb);
+  const loose = pages.filter(p => !chapterOf(nb, p));
   return `<div class="nb ${active ? 'active' : ''}" data-nb="${nb.id}">
-    <button class="nb-row" data-act="nb-click" data-nb="${nb.id}">
+    <button class="nb-row" data-act="nb-click" data-nb="${nb.id}" title="Right-click for options">
       <span class="nb-spine" style="--c:${nb.color}">${icon(ic, 'sm')}</span>
       <span class="nb-name">${esc(nb.name)}</span><span class="nb-count">${pages.length}</span>
       <span class="nb-chev ${open ? 'open' : ''}" data-act="nb-toggle" data-nb="${nb.id}">${icon('chevron', 'sm')}</span>
     </button>
     ${open ? `<div class="nb-pages">
       <button class="pg-row cover ${active && !ns.pgId ? 'active' : ''}" data-act="pg-open" data-nb="${nb.id}" data-pg="">${icon('book', 'sm')}<span class="t">Inside cover</span></button>
-      ${pages.map((p, i) => `<button class="pg-row ${p.id === ns.pgId ? 'active' : ''}" data-act="pg-open" data-nb="${nb.id}" data-pg="${p.id}">
-        <span class="pg-num">${nb.kind === 'journal' ? '' : i + 1}</span><span class="t">${esc(pageLabel(p, i))}</span>
-        ${p.bookmarked ? `<span class="rib-dot" style="--c:${nb.color}"></span>` : ''}${(p.stickies || []).length ? `<span class="st-dot" title="${p.stickies.length} sticky notes"></span>` : ''}</button>`).join('')}
+      ${loose.map(p => pgRowHtml(nb, p, pages.indexOf(p))).join('')}
+      ${chaps.map(c => {
+        const cp = pages.filter(p => p.chapterId === c.id);
+        const hasActive = cp.some(p => p.id === ns.pgId);
+        return `<div class="chap ${c.collapsed ? 'closed' : ''} ${hasActive ? 'has-active' : ''}" data-chap="${c.id}">
+          <button class="chap-row" data-act="chap-toggle" data-nb="${nb.id}" data-chap="${c.id}" title="Right-click for options">
+            <span class="chap-chev">${icon('chevron', 'sm')}</span>${icon('folder', 'sm')}<span class="t">${esc(c.name)}</span><span class="nb-count">${cp.length}</span></button>
+          ${c.collapsed ? '' : `<div class="chap-pages" data-chap-drop="${c.id}" data-nb="${nb.id}">${cp.map(p => pgRowHtml(nb, p, pages.indexOf(p))).join('') || '<div class="chap-empty">Empty chapter: drag pages here</div>'}</div>`}
+        </div>`;
+      }).join('')}
       ${nb.kind !== 'journal' ? `<button class="pg-row add" data-act="pg-new" data-nb="${nb.id}">${icon('plus', 'sm')}<span class="t">New page</span></button>` : ''}
     </div>` : ''}
   </div>`;
@@ -256,7 +299,7 @@ function renderDesk() {
     <div class="book-area">
       <div class="book" style="--nb:${nb.color}">
         <div class="book-cover"></div>
-        <div class="spine">${'<i></i>'.repeat(40)}</div>
+        <div class="spine"></div>
         <div class="page-wrap" id="page-wrap">
           <div class="page-under u2"></div><div class="page-under"></div>
           ${pg ? pageHtml(nb, pg, idx) : coverHtml(nb)}
@@ -275,6 +318,7 @@ function pageHtml(nb, pg, idx) {
       <span class="page-date">${esc(H().fmtShort(H().dayKey(new Date(pg.createdAt))))}</span></header>
     <div class="page-body" id="page-body" contenteditable="${ns.tool === 'type' ? 'true' : 'false'}" spellcheck="true" data-placeholder="Start writing… paste links or pictures, or add a sticky note.">${pg.html || ''}</div>
     <canvas class="ink" id="ink"></canvas>
+    <div class="photos" id="photos">${(pg.images || []).map(photoHtml).join('')}</div>
     <div class="stickies" id="stickies">${(pg.stickies || []).map(stickyHtml).join('')}</div>
     ${coffee ? `<svg class="coffee" viewBox="0 0 120 120" style="--r:${hash(pg.id) % 360}deg"><circle cx="60" cy="60" r="46" fill="none" stroke="#8B5A2B" stroke-width="7" stroke-dasharray="210 18 40 22" opacity=".09"/><circle cx="60" cy="60" r="41" fill="none" stroke="#8B5A2B" stroke-width="1.5" opacity=".07"/><circle cx="64" cy="58" r="39" fill="#8B5A2B" opacity=".025"/></svg>` : ''}
     <footer class="page-num">— ${nb.kind === 'journal' ? esc(H().fmtShort(pg.date || H().today())) : idx + 1} —</footer>
@@ -322,7 +366,11 @@ function coverBody(nb) {
       <div class="cover-tasks">${ptasks.length ? ptasks.map(t => `<div class="ctask" data-id="${t.id}"><button class="check" data-act="toggle"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button><span>${esc(t.title)}</span>
         ${t.date === H().today() ? '<span class="chip accent">Today</span>' : `<button class="pill-btn sage" data-act="today">${icon('sun', 'sm')} Today</button>`}</div>`).join('') : '<div class="muted">No open tasks on this project.</div>'}</div></div>` : ''}
     <div class="cover-section"><h4>${icon('note', 'sm')} Contents</h4>
-      <ol class="contents">${pages.map((pg, i) => `<li><button data-act="pg-open" data-nb="${nb.id}" data-pg="${pg.id}"><span class="t">${esc(pageLabel(pg, i))}</span><span class="dots"></span><span class="n">${nb.kind === 'journal' ? esc(H().fmtShort(pg.date || '')) : i + 1}</span>${pg.bookmarked ? `<span class="rib-dot" style="--c:${nb.color}"></span>` : ''}</button></li>`).join('') || '<li class="muted">No pages yet.</li>'}</ol>
+      <ol class="contents">${pages.map((pg, i) => {
+        const ch = chapterOf(nb, pg); const prev = pages[i - 1];
+        const head = ch && (!prev || prev.chapterId !== ch.id) ? `<li class="ch-head">${icon('folder', 'sm')} ${esc(ch.name)}</li>` : '';
+        return `${head}<li class="${ch ? 'in-ch' : ''}"><button data-act="pg-open" data-nb="${nb.id}" data-pg="${pg.id}"><span class="t">${esc(pageLabel(pg, i))}</span><span class="dots"></span><span class="n">${nb.kind === 'journal' ? esc(H().fmtShort(pg.date || '')) : i + 1}</span>${pg.bookmarked ? `<span class="rib-dot" style="--c:${nb.color}"></span>` : ''}</button></li>`;
+      }).join('') || '<li class="muted">No pages yet.</li>'}</ol>
       ${nb.kind !== 'journal' ? `<button class="btn sm" data-act="pg-new" data-nb="${nb.id}">${icon('plus', 'sm')}New page</button>` : ''}</div>
     <div class="cover-foot"><button class="btn sm" data-act="pdf-notebook">${icon('file', 'sm')}Export notebook as PDF</button>
       ${nb.kind === 'normal' ? `<button class="btn sm danger" data-act="nb-delete">${icon('trash', 'sm')}Delete notebook</button>` : ''}</div>`;
@@ -340,6 +388,7 @@ function mountPage() {
   const page = $('#page'); if (!page) return;
   if (resizeObs) resizeObs.disconnect();
   if (!ns.pgId) return;
+  migrateInlinePhotos();
   refreshTaskMarks();
   fitPage();
   resizeObs = new ResizeObserver(() => fitPage());
@@ -355,7 +404,7 @@ function fitPage() {
   if (!page || !body || !pg) return;
   fitting = true;
   const w = page.clientWidth;
-  const stickBottom = Math.max(0, ...(pg.stickies || []).map(s => s.y + 230));
+  const stickBottom = Math.max(0, ...$$('#stickies .sticky, #photos .photo', page).map(el => el.offsetTop + el.offsetHeight + 60));
   const inkBottom = Math.max(0, ...(pg.strokes || []).flatMap(s => s.pts.map(p => p[1] + 40)));
   const r = document.createRange(); r.selectNodeContents(body);
   const content = body.childNodes.length ? r.getBoundingClientRect().bottom - page.getBoundingClientRect().top : body.offsetTop;
@@ -373,15 +422,31 @@ function refreshTaskMarks() {
   });
 }
 
-function commitEditor() {
+function commitEditor(final) {
   clearTimeout(editTimer);
   const body = $('#page-body'), pg = curPg();
+  if (final && body && pg && trimTrailing(body)) body.dataset.dirty = '1';
   if (body && pg && body.dataset.dirty) {
     pg.html = cleanHtml(body.innerHTML);
     delete body.dataset.dirty;
     touch(pg);
     H().save();
   }
+}
+// empty lines left at the very end (e.g. after clicking far down and not typing) are dropped,
+// unless they hold space for a picture or sticky
+function trimTrailing(body) {
+  const keepTo = Math.max(0, ...$$('#photos .photo').map(el => el.offsetTop + el.offsetHeight)) - body.offsetTop;
+  let n = 0;
+  while (body.lastChild) {
+    const el = body.lastChild;
+    const empty = (el.nodeType === 3 && !el.textContent.trim()) ||
+      (el.nodeType === 1 && /^(DIV|P)$/.test(el.tagName) && !el.textContent.trim() && !el.querySelector('img,.nlink,ul,ol'));
+    if (!empty) break;
+    if (el.nodeType === 1 && el.offsetTop < keepTo) break;
+    el.remove(); n++;
+  }
+  return n;
 }
 function cleanHtml(html) {
   // strip leftover search highlights and empty trailing breaks
@@ -429,7 +494,9 @@ function flipper(content, h) {
 }
 function turnTo(nbId, pgId, dir) {
   if (nbId === ns.nbId && pgId === ns.pgId) return;
-  commitEditor();
+  commitEditor(true);
+  const tp = pgId && getPg(pgId), tnb = getNb(nbId);
+  if (tp && tnb) { const ch = chapterOf(tnb, tp); if (ch && ch.collapsed) ch.collapsed = false; }
   processActions(curPg());
   hideSelbar(); closeMenu();
   const oldPage = $('#page');
@@ -727,31 +794,196 @@ function insertAtCaret(node, range) {
   after.setStartAfter(last); after.collapse(true);
   sel.removeAllRanges(); sel.addRange(after);
 }
-function photoNode(src) {
-  const span = document.createElement('span');
-  span.className = 'photo size-m';
-  span.contentEditable = 'false';
-  span.style.setProperty('--rot', (Math.random() * 4 - 2).toFixed(1) + 'deg');
-  span.innerHTML = `<img src="${esc(src)}" alt=""><span class="tape"></span>
-    <span class="photo-tools"><button data-ph="s" title="Small">S</button><button data-ph="m" title="Medium">M</button><button data-ph="l" title="Large">L</button><button data-ph="x" title="Remove">×</button></span>`;
-  return span;
+// ------------------------------------------------------------------ pictures (free-floating, like taped-in photos)
+function photoHtml(im) {
+  return `<figure class="photo free" data-iid="${im.id}" style="left:${im.x}%;top:${im.y}px;width:${im.w}px;--rot:${im.rot || 0}deg">
+    <img src="${esc(im.src)}" alt="" draggable="false"><span class="tape"></span>
+    <button class="ph-del" data-act="img-del" title="Remove picture">${icon('x', 'sm')}</button>
+    <i class="ph-rz" title="Drag to resize"></i></figure>`;
 }
+const imageOf = (el) => { const pg = curPg(); const id = el.closest('.photo')?.dataset.iid; return pg && (pg.images || []).find(i => i.id === id); };
 function readAsDataUrl(file) {
   return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
 }
-async function insertImages(files, range) {
+function naturalSize(src) {
+  return new Promise(res => { const im = new Image(); im.onload = () => res([im.naturalWidth || 300, im.naturalHeight || 200]); im.onerror = () => res([300, 200]); im.src = src; });
+}
+function topBlock(node) {
+  const body = $('#page-body');
+  let b = node && (node.nodeType === 1 ? node : node.parentNode);
+  while (b && b.parentNode !== body) { if (b === body || !b.parentNode) return null; b = b.parentNode; }
+  return b && b !== body ? b : null;
+}
+const LINE = 34;
+function emptyLine() { const d = document.createElement('div'); d.appendChild(document.createElement('br')); return d; }
+/** Add a picture to the page. With `at` (a drop point) it lands there; otherwise it's taped in at the
+ *  caret and the text below makes room for it. */
+async function addPicture(src, at) {
+  const pg = curPg(), page = $('#page'), body = $('#page-body'); if (!pg || !page) return;
+  const pw = page.clientWidth;
+  const [nw, nh] = await naturalSize(src);
+  const w = Math.round(Math.max(120, Math.min(nw, 380, pw * .6)));
+  const h = Math.round(w * nh / nw) + 32;
+  const pr = page.getBoundingClientRect();
+  let x, y;
+  if (at) {
+    x = at.x - pr.left - w / 2; y = at.y - pr.top - 20;
+  } else {
+    const sel = getSelection();
+    let blk = sel.rangeCount && body.contains(sel.anchorNode) ? topBlock(sel.anchorNode) : null;
+    if (!blk) { blk = emptyLine(); body.appendChild(blk); }
+    const hasText = !!blk.textContent.trim() || !!blk.querySelector('img,.nlink');
+    const br = blk.getBoundingClientRect();
+    x = 96; y = (hasText ? br.bottom : br.top) - pr.top + 8;
+    const lines = Math.ceil((h + 20) / LINE) - (hasText ? 0 : 1);
+    let last = blk;
+    for (let i = 0; i < lines; i++) { const d = emptyLine(); last.after(d); last = d; }
+    const caretLine = emptyLine(); last.after(caretLine);
+    const r = document.createRange(); r.setStart(caretLine, 0); r.collapse(true); sel.removeAllRanges(); sel.addRange(r);
+    bodyChanged();
+  }
+  x = Math.max(-w * .2, Math.min(pw - w * .8, x));
+  const im = { id: nid('im'), src, x: +(x / pw * 100).toFixed(2), y: Math.max(0, Math.round(y)), w, rot: +(Math.random() * 4 - 2).toFixed(1) };
+  pg.images = pg.images || [];
+  pg.images.push(im);
+  touch(pg); H().save();
+  const layer = $('#photos');
+  layer.insertAdjacentHTML('beforeend', photoHtml(im));
+  const el = layer.lastElementChild;
+  if (!REDUCED) el.animate([{ opacity: 0, transform: `translateY(-30px) rotate(${im.rot - 6}deg) scale(1.04)` }, { opacity: 1, transform: `rotate(${im.rot}deg)` }], { duration: 480, easing: 'cubic-bezier(.3,.8,.3,1)' });
+  window.Sound && Sound.play('stick');
+  el.querySelector('img').addEventListener('load', fitPage, { once: true });
+  fitPage();
+}
+async function insertImages(files, at) {
+  let off = 0;
   for (const f of files) {
     if (!/^image\//.test(f.type)) continue;
     const data = await readAsDataUrl(f);
     const src = (await H().api.saveImage(data)) || data;
-    const frag = document.createDocumentFragment();
-    frag.appendChild(photoNode(src));
-    frag.appendChild(document.createTextNode(' '));
-    insertAtCaret(frag, range);
-    range = null;
+    await addPicture(src, at ? { x: at.x + off, y: at.y + off } : null);
+    off += 24;
   }
-  bodyChanged();
 }
+// older versions put pictures inside the text, where dragging them made copies; lift them out onto the page
+function migrateInlinePhotos() {
+  const pg = curPg(), page = $('#page'), body = $('#page-body');
+  if (!pg || !body) return;
+  const outer = $$('.photo', body).filter(ph => !ph.parentElement.closest('.photo'));
+  if (!outer.length) return;
+  const pr = page.getBoundingClientRect(), pw = page.clientWidth;
+  pg.images = pg.images || [];
+  const seen = new Set(pg.images.map(i => i.src));
+  const plan = outer.map(ph => ({ ph, r: ph.getBoundingClientRect(), imgs: $$('img', ph) }));
+  plan.forEach(({ r, imgs }) => imgs.forEach(img => {
+    const src = img.getAttribute('src'); if (!src || seen.has(src)) return; seen.add(src);
+    const w = Math.round(Math.min(img.getBoundingClientRect().width || 300, 380));
+    pg.images.push({ id: nid('im'), src, x: +((r.left - pr.left) / pw * 100).toFixed(2), y: Math.round(r.top - pr.top), w, rot: +(Math.random() * 4 - 2).toFixed(1) });
+  }));
+  plan.forEach(({ ph, r }) => {
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < Math.max(1, Math.round(r.height / LINE)); i++) frag.appendChild(document.createElement('br'));
+    ph.replaceWith(frag);
+  });
+  pg.html = cleanHtml(body.innerHTML);
+  touch(pg); H().save();
+  $('#photos').innerHTML = pg.images.map(photoHtml).join('');
+}
+function removePicture(el) {
+  const pg = curPg(); const im = imageOf(el); if (!pg || !im) return;
+  const snap = H().snapshot();
+  const go = () => { pg.images = pg.images.filter(x => x.id !== im.id); el.remove(); touch(pg); H().save(); fitPage(); H().undoable('Picture removed', snap, 'image'); };
+  if (REDUCED) return go();
+  el.animate([{ opacity: 1 }, { opacity: 0, transform: `translateY(20px) rotate(${(im.rot || 0) + 8}deg) scale(.92)` }], { duration: 260, easing: 'ease-in' }).finished.then(go);
+}
+// drag to move, corner to resize, double-click to view full size
+let pdrag = null;
+document.addEventListener('pointerdown', (e) => {
+  const ph = e.target.closest && e.target.closest('#photos .photo');
+  if (!ph || e.button !== 0 || e.target.closest('.ph-del')) return;
+  const page = $('#page');
+  e.preventDefault();
+  hideSelbar();
+  const resize = !!e.target.closest('.ph-rz');
+  pdrag = { el: ph, resize, sx: e.clientX, sy: e.clientY, left: ph.offsetLeft, top: ph.offsetTop, w0: ph.offsetWidth, moved: false, id: e.pointerId, pw: page.clientWidth };
+  ph.setPointerCapture && ph.setPointerCapture(e.pointerId);
+});
+document.addEventListener('pointermove', (e) => {
+  if (!pdrag || e.pointerId !== pdrag.id) return;
+  const d = pdrag, dx = e.clientX - d.sx, dy = e.clientY - d.sy;
+  if (!d.moved && Math.hypot(dx, dy) < 3) return;
+  if (!d.moved) { d.moved = true; d.el.classList.add(d.resize ? 'resizing' : 'dragging'); document.body.classList.add(d.resize ? 'resizing-photo' : 'dragging-sticky'); }
+  if (d.resize) {
+    const w = Math.max(80, Math.min(d.pw - d.left + 40, d.w0 + dx));
+    d.el.style.width = w + 'px';
+    return;
+  }
+  const x = Math.max(-d.el.offsetWidth * .3, Math.min(d.pw - d.el.offsetWidth * .7, d.left + dx));
+  const y = Math.max(-20, d.top + dy);
+  d.el.style.left = x + 'px'; d.el.style.top = y + 'px';
+  d.el.style.setProperty('--tilt', Math.max(-6, Math.min(6, (e.movementX || 0) * .6)) + 'deg');
+});
+document.addEventListener('pointerup', (e) => {
+  if (!pdrag || e.pointerId !== pdrag.id) return;
+  const d = pdrag; pdrag = null;
+  document.body.classList.remove('dragging-sticky', 'resizing-photo');
+  d.el.classList.remove('dragging', 'resizing');
+  if (!d.moved) return;
+  const im = imageOf(d.el); if (!im) return;
+  if (d.resize) { im.w = Math.round(d.el.offsetWidth); }
+  else {
+    im.x = +(d.el.offsetLeft / d.pw * 100).toFixed(2);
+    im.y = Math.round(d.el.offsetTop);
+    d.el.style.left = im.x + '%';
+    d.el.style.removeProperty('--tilt');
+    d.el.classList.add('landing');
+    setTimeout(() => d.el.classList.remove('landing'), 450);
+    window.Sound && Sound.play('stick');
+  }
+  touch(curPg()); H().save(); fitPage();
+});
+let lightbox = null;
+function closeLightbox() { if (lightbox) { const l = lightbox; lightbox = null; l.classList.add('out'); setTimeout(() => l.remove(), 250); } }
+document.addEventListener('dblclick', (e) => {
+  const ph = e.target.closest && e.target.closest('#photos .photo'); if (!ph) return;
+  const src = ph.querySelector('img').src;
+  lightbox = document.createElement('div');
+  lightbox.className = 'lightbox';
+  lightbox.innerHTML = `<img src="${esc(src)}" alt=""><span class="lb-hint">Click anywhere or press Esc to close</span>`;
+  lightbox.addEventListener('click', closeLightbox);
+  document.body.appendChild(lightbox);
+});
+// stop the browser's own drag-and-drop from copying pictures and link chips
+let internalDrag = false;
+document.addEventListener('dragstart', (e) => {
+  const el = e.target.nodeType === 1 ? e.target : e.target.parentElement;
+  if (!el || !el.closest) return;
+  if (el.closest('#page .photo, #page .nlink, #page img')) { e.preventDefault(); return; }
+  internalDrag = !!el.closest('#page-body');
+});
+document.addEventListener('dragend', () => { setTimeout(() => { internalDrag = false; }, 0); });
+
+// ------------------------------------------------------------------ click any line to start writing there
+document.addEventListener('mousedown', (e) => {
+  const body = $('#page-body');
+  if (!body || e.button !== 0 || ns.tool !== 'type' || e.target !== body) return;
+  const br = body.getBoundingClientRect();
+  const padTop = parseFloat(getComputedStyle(body).paddingTop) || 0;
+  const top = br.top + padTop;
+  let bottom = top;
+  if (body.childNodes.length) { const r = document.createRange(); r.selectNodeContents(body); bottom = Math.max(top, r.getBoundingClientRect().bottom); }
+  if (e.clientY <= bottom + 4) return; // on or beside existing writing: the normal caret is right
+  e.preventDefault();
+  const want = Math.floor((e.clientY - top) / LINE) + 1;
+  const have = body.childNodes.length ? Math.round((bottom - top) / LINE) : 0;
+  if (!body.textContent.trim() && !body.querySelector('ul,ol,.nlink')) body.innerHTML = '';
+  let last = null;
+  for (let i = 0; i < Math.max(1, want - (body.childNodes.length ? have : 0)); i++) { last = emptyLine(); body.appendChild(last); }
+  body.focus();
+  const r = document.createRange(); r.setStart(last, 0); r.collapse(true);
+  const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  bodyChanged();
+});
 
 document.addEventListener('paste', (e) => {
   const body = e.target.closest && e.target.closest('#page-body');
@@ -765,25 +997,19 @@ document.addEventListener('paste', (e) => {
   const text = cd.getData('text/plain');
   if (!text) return;
   const t = text.trim();
-  if (/^https?:\/\/\S+\.(png|jpe?g|gif|webp)(\?\S*)?$/i.test(t)) {
-    const frag = document.createDocumentFragment(); frag.appendChild(photoNode(t)); frag.appendChild(document.createTextNode(' '));
-    insertAtCaret(frag); bodyChanged(); return;
-  }
+  if (/^https?:\/\/\S+\.(png|jpe?g|gif|webp)(\?\S*)?$/i.test(t)) { addPicture(t); return; }
   insertAtCaret(textFragment(text));
   bodyChanged();
 });
 document.addEventListener('dragover', (e) => { if (e.target.closest && e.target.closest('#page')) e.preventDefault(); });
 document.addEventListener('drop', (e) => {
   const page = e.target.closest && e.target.closest('#page'); if (!page || !ns.pgId) return;
+  if (internalDrag) { internalDrag = false; setTimeout(bodyChanged, 0); return; } // moving text within the page: let it move
   e.preventDefault();
   const range = document.caretRangeFromPoint ? document.caretRangeFromPoint(e.clientX, e.clientY) : null;
   const inBody = range && $('#page-body').contains(range.startContainer);
   const files = [...(e.dataTransfer.files || [])].filter(f => /^image\//.test(f.type));
-  if (files.length) {
-    if (!inBody) { placeCaret($('#page-body')); }
-    insertImages(files, inBody ? range : null);
-    return;
-  }
+  if (files.length) { insertImages(files, { x: e.clientX, y: e.clientY }); return; }
   const text = e.dataTransfer.getData('text/plain');
   if (text) { if (!inBody) placeCaret($('#page-body')); insertAtCaret(textFragment(text), inBody ? range : null); bodyChanged(); }
 });
@@ -791,16 +1017,6 @@ document.addEventListener('drop', (e) => {
 document.addEventListener('click', (e) => {
   const a = e.target.closest('#page a.nlink');
   if (a) { e.preventDefault(); H().api.openExternal(a.dataset.href || a.href); return; }
-  const ph = e.target.closest('#page .photo-tools button');
-  if (ph) {
-    e.preventDefault();
-    const photo = ph.closest('.photo');
-    if (ph.dataset.ph === 'x') {
-      photo.animate([{ opacity: 1, transform: 'scale(1)' }, { opacity: 0, transform: 'scale(.9)' }], { duration: 220 }).finished.then(() => { photo.remove(); bodyChanged(); });
-    } else {
-      photo.classList.remove('size-s', 'size-m', 'size-l'); photo.classList.add('size-' + ph.dataset.ph); bodyChanged();
-    }
-  }
   if (!e.target.closest('.menu') && !e.target.closest('[data-act="menu"]')) closeMenu();
 }, true);
 
@@ -839,6 +1055,7 @@ document.addEventListener('keydown', (e) => {
   if (H().state.view !== 'notes') return;
   if (e.altKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) { e.preventDefault(); step(e.key === 'ArrowRight' ? 1 : -1); return; }
   if (e.key === 'Escape') {
+    if (lightbox) { closeLightbox(); return; }
     if ($('.menu')) { closeMenu(); return; }
     if (ns.tool !== 'type') { setTool('type'); return; }
     if (document.activeElement && document.activeElement.classList.contains('sticky-text')) document.activeElement.blur();
@@ -942,11 +1159,25 @@ function highlightSearch(q) {
 }
 
 // ------------------------------------------------------------------ menus
-function closeMenu() { const m = $('.menu'); if (m) { m.classList.add('out'); setTimeout(() => m.remove(), 160); } }
+function closeMenu() {
+  $$('.menu').forEach(m => { m.classList.add('out'); setTimeout(() => m.remove(), 160); });
+  $$('#shelf .ctx-on').forEach(x => x.classList.remove('ctx-on'));
+}
 function openMenu(btn, kind) {
   closeMenu();
   const pg = curPg(), nb = curNb();
   const customs = D().noteTemplates || [];
+  if (kind === 'more') {
+    const r = btn.getBoundingClientRect();
+    const extra = [
+      { label: 'Inside cover & settings', ic: 'book', fn: () => turnTo(ns.nbId, null, -1) },
+      { label: "Today's journal", ic: 'calendar', fn: () => actions['journal-today']() },
+      { label: 'Export notebook as PDF', ic: 'file', fn: () => exportPdf('notebook') }
+    ];
+    const items = pg ? [...extra, '-', ...pageMenuItems(pg, true)] : extra;
+    ctxMenu(items, r.right, r.bottom + 6, { alignRight: true });
+    return;
+  }
   const items = kind === 'newpage' ? [
     ...TEMPLATES.map(t => ['pg-new-tpl', t.ic, t.name, '', t.id]),
     ...(customs.length ? [null, ...customs.map(t => ['pg-new-tpl', 'template', t.name, 'custom', t.id])] : []),
@@ -997,6 +1228,7 @@ function renderToolbarOnly() {
 function deskTopHtml(nb, pg, idx, pages) {
   const tool = ns.tool;
   return `<div class="desk-top">
+      <button class="icon-btn shelf-toggle" data-act="shelf-toggle" title="${ns.shelfHidden ? 'Show notebooks' : 'Hide notebooks'} (Ctrl+Shift+\\)">${icon('sidebar', 'sm')}</button>
       <div class="crumbs"><span class="nb-dot" style="background:${nb.color}"></span><b>${esc(nb.name)}</b>${pg ? ` <span class="muted">›</span> <span class="crumb-pg">${esc(pageLabel(pg, idx))}</span>` : ' <span class="muted">› Inside cover</span>'}</div>
       <div class="turners">
         <button class="icon-btn" data-act="pg-prev" title="Previous page (Alt+←)" ${idx < 0 ? 'disabled' : ''}>${icon('chevronL', 'sm')}</button>
@@ -1039,6 +1271,7 @@ function printHtml(nb, pages, title) {
       <header class="nhead"><div class="page-title">${esc(pg.title || pageLabel(pg, i))}</div><span class="page-date">${esc(H().fmtShort(H().dayKey(new Date(pg.createdAt))))}</span></header>
       <div class="page-body">${body}</div>
       ${inkImage(pg, W, h)}
+      <div class="photos">${(pg.images || []).map(photoHtml).join('')}</div>
       <div class="stickies">${(pg.stickies || []).map(s => stickyHtml(s).replace(/<div class="sticky-tools">[\s\S]*?<\/div>\s*<\/div>$/, '</div>').replace('contenteditable="true"', '')).join('')}</div>
       <footer class="page-num">— ${i + 1} —</footer></article>`;
   }).join('');
@@ -1052,11 +1285,13 @@ function printHtml(nb, pages, title) {
     <body><div class="print-title">${esc(title)}</div>${sheets}</body></html>`;
 }
 async function exportPdf(which) {
-  commitEditor();
   const nb = curNb();
-  const pages = which === 'page' && curPg() ? [curPg()] : pagesOf(nb.id);
+  return exportPages(nb, which === 'page' && curPg() ? [curPg()] : pagesOf(nb.id));
+}
+async function exportPages(nb, pages) {
+  commitEditor();
   if (!pages.length) { H().toast('No pages to export yet', { ic: 'file' }); return; }
-  const title = which === 'page' ? `${nb.name}: ${pageLabel(pages[0], pagesOf(nb.id).indexOf(pages[0]))}` : nb.name;
+  const title = pages.length === 1 && pagesOf(nb.id).length > 1 ? `${nb.name}: ${pageLabel(pages[0], pagesOf(nb.id).indexOf(pages[0]))}` : nb.name;
   H().toast('Preparing PDF…', { ic: 'file', timeout: 2500 });
   const ok = await H().api.exportPdf(printHtml(nb, pages, title), title);
   if (ok) H().toast('PDF saved', { ic: 'file' });
@@ -1105,15 +1340,17 @@ const actions = {
   },
   'pg-prev': () => step(-1),
   'pg-next': () => step(1),
-  'pg-new': (el) => { const nbId = el.dataset.nb || ns.nbId; const pg = createPage(nbId); H().save(); turnTo(nbId, pg.id, 1); setTimeout(() => $('#page-title')?.focus(), 950); },
+  'pg-new': (el) => { const nbId = el.dataset.nb || ns.nbId; const pg = createPage(nbId); placeAtEnd(pg, nbId, el.dataset.chap || null); H().save(); turnTo(nbId, pg.id, 1); setTimeout(() => $('#page-title')?.focus(), 950); },
   'pg-new-blank': () => actions['pg-new']({ dataset: { nb: ns.nbId } }),
   'pg-new-tpl': (el) => {
     closeMenu();
-    const pg = createPage(ns.nbId, el.dataset.v); H().save(); turnTo(ns.nbId, pg.id, 1);
+    const pg = createPage(ns.nbId, el.dataset.v);
+    if (curPg() && curPg().notebookId === ns.nbId) placeAfter(pg, curPg()); else placeAtEnd(pg, ns.nbId, null);
+    H().save(); turnTo(ns.nbId, pg.id, 1);
     setTimeout(() => { const t = $('#page-title'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }, 950);
   },
   'tpl-save': () => {
-    closeMenu(); commitEditor();
+    closeMenu(); if (curPg()) { saveTemplate(curPg().id); return; }
     const pg = curPg(); if (!pg) return;
     const name = (pg.title || '').replace(/[:\s]+$/, '').trim() || 'My template';
     const t = document.createElement('template'); t.innerHTML = pg.html || '';
@@ -1135,6 +1372,7 @@ const actions = {
   'pg-ribbon': () => {
     closeMenu();
     const pg = curPg(); if (!pg) return;
+    toggleRibbon(pg.id); return;
     pg.bookmarked = !pg.bookmarked; touch(pg); H().save();
     const r = $('#page .ribbon'); if (r) { r.classList.toggle('on', pg.bookmarked); r.title = pg.bookmarked ? 'Remove ribbon' : 'Mark this page with a ribbon'; }
     renderShelf();
@@ -1166,6 +1404,7 @@ const actions = {
   'nb-color': (el) => { const nb = curNb(); nb.color = el.dataset.v; H().save(); const keep = $('#desk').scrollTop; renderDesk(); $('#desk').scrollTop = keep; renderShelf(); },
   'nb-paper': (el) => { const nb = curNb(); nb.paper = el.dataset.v; H().save(); renderCoverBody(); },
   'nb-delete': () => {
+    deleteNotebook(curNb().id); return;
     const nb = curNb(); const snap = H().snapshot();
     const ids = new Set(pagesOf(nb.id).map(p => p.id));
     D().pages = D().pages.filter(p => !ids.has(p.id));
@@ -1193,6 +1432,16 @@ const actions = {
     H().toast(s.onDesk ? 'Pinned to your Today desk' : 'Taken off your desk', { ic: 'sun' });
   },
   'st-del': (el) => removeSticky(el.closest('.sticky')),
+  'img-del': (el) => removePicture(el.closest('.photo')),
+  'shelf-toggle': () => toggleShelf(),
+  'chap-toggle': (el) => {
+    const nb = getNb(el.dataset.nb); const c = (nb.chapters || []).find(x => x.id === el.dataset.chap); if (!c) return;
+    const box = el.parentElement.querySelector('.chap-pages');
+    const done = () => { c.collapsed = !c.collapsed; H().save(); renderShelf(); };
+    if (!c.collapsed && box && !REDUCED) { box.animate([{ height: box.offsetHeight + 'px', opacity: 1 }, { height: '0px', opacity: 0 }], { duration: 220, easing: H().EASE, fill: 'forwards' }).finished.then(done); return; }
+    done();
+    if (!c.collapsed && !REDUCED) { const nbox = $(`.chap[data-chap="${c.id}"] .chap-pages`); if (nbox) { const hh = nbox.scrollHeight; nbox.animate([{ height: '0px', opacity: 0 }, { height: hh + 'px', opacity: 1 }], { duration: 300, easing: H().EASE }); } }
+  },
   tool: (el) => setTool(el.dataset.v),
   pen: (el) => { ns.pen = el.dataset.v; persist(); renderToolbarOnly(); },
   'ink-undo': () => { const pg = curPg(); if (pg && pg.strokes && pg.strokes.length) { pg.strokes.pop(); drawInk(); touch(pg); H().save(); } },
@@ -1200,6 +1449,372 @@ const actions = {
   'pdf-page': () => { closeMenu(); exportPdf('page'); },
   'pdf-notebook': () => { closeMenu(); exportPdf('notebook'); }
 };
+
+// ================================================================== CONTEXT MENUS, CHAPTERS, PAGE ORGANISING
+function ctxMenu(items, x, y, opts = {}) {
+  if (!opts.level) closeMenu();
+  $$('.menu').forEach(m => { if ((+m.dataset.level || 0) >= (opts.level || 0) && opts.level) m.remove(); });
+  const m = document.createElement('div');
+  m.className = 'menu ctx' + (opts.level ? ' sub' : '');
+  m.dataset.level = opts.level || 0;
+  items.filter(it => it !== null && it !== false && it !== undefined).forEach((it, i, arr) => {
+    if (it === '-') { if (i > 0 && arr[i - 1] !== '-' && i < arr.length - 1) m.insertAdjacentHTML('beforeend', '<div class="menu-sep"></div>'); return; }
+    if (it.header) { m.insertAdjacentHTML('beforeend', `<div class="menu-label">${esc(it.header)}</div>`); return; }
+    const b = document.createElement('button');
+    b.className = (it.danger ? 'danger ' : '') + (it.sub ? 'has-sub' : '');
+    b.disabled = !!it.disabled;
+    b.innerHTML = `${icon(it.ic || 'dot', 'sm')}<span class="mi">${esc(it.label)}</span>${it.sub ? `<span class="sub-arrow">${icon('chevronR', 'sm')}</span>` : it.hint ? `<kbd>${esc(it.hint)}</kbd>` : ''}`;
+    if (it.sub) {
+      const openSub = () => {
+        $$('.menu.ctx').forEach(x => x.classList.remove('sub-open-from'));
+        const r = b.getBoundingClientRect();
+        $$('.menu.ctx button.sub-on', m).forEach(x => x.classList.remove('sub-on'));
+        b.classList.add('sub-on');
+        ctxMenu(it.sub, r.right + 2, r.top - 6, { level: (opts.level || 0) + 1, from: r });
+      };
+      b.addEventListener('mouseenter', openSub);
+      b.addEventListener('click', (e) => { e.stopPropagation(); openSub(); });
+    } else {
+      b.addEventListener('mouseenter', () => { $$('.menu.ctx').forEach(x => { if ((+x.dataset.level || 0) > (opts.level || 0)) x.remove(); }); $$('button.sub-on', m).forEach(x => x.classList.remove('sub-on')); });
+      b.addEventListener('click', (e) => { e.stopPropagation(); if (it.disabled) return; closeMenu(); it.fn && it.fn(); });
+    }
+    m.appendChild(b);
+  });
+  document.body.appendChild(m);
+  const w = m.offsetWidth, h = m.offsetHeight;
+  let left = opts.alignRight ? x - w : x, top = y;
+  if (left + w > innerWidth - 8) left = opts.from ? opts.from.left - w - 2 : innerWidth - w - 8;
+  if (top + h > innerHeight - 8) top = Math.max(8, innerHeight - h - 8);
+  m.style.left = Math.max(8, left) + 'px'; m.style.top = top + 'px';
+  return m;
+}
+function refreshDeskChrome() {
+  if (!$('#desk')) return;
+  renderToolbarOnly();
+  const pg = curPg();
+  if (!pg) { renderCoverBody(); return; }
+  const nb = curNb(), idx = pagesOf(nb.id).indexOf(pg);
+  const f = $('#page .page-num'); if (f && nb.kind !== 'journal') f.textContent = `— ${idx + 1} —`;
+}
+function afterStructureChange() { H().save(); renderShelf(); refreshDeskChrome(); H().updateSidebar(); }
+
+function movePage(id, nbId, chapterId, beforeId, quiet) {
+  const pg = getPg(id); const nb = getNb(nbId); if (!pg || !nb) return;
+  if (id === ns.pgId) commitEditor();
+  const fromNb = pg.notebookId;
+  pg.notebookId = nbId; pg.chapterId = chapterId || null;
+  const g = pagesOf(nbId).filter(p => p.id !== id && (chapterId ? p.chapterId === chapterId : !chapterOf(nb, p)));
+  const at = beforeId ? g.findIndex(p => p.id === beforeId) : -1;
+  g.splice(at < 0 ? g.length : at, 0, pg); renumber(g);
+  const ch = chapterId ? (nb.chapters || []).find(c => c.id === chapterId) : null;
+  if (ch) ch.collapsed = false;
+  ns.expanded[nbId] = true;
+  touch(pg);
+  if (id === ns.pgId && nbId !== ns.nbId) { ns.nbId = nbId; persist(); H().save(); renderShelf(); const keep = $('#desk').scrollTop; renderDesk(); $('#desk').scrollTop = keep; }
+  else afterStructureChange();
+  if (fromNb !== nbId && ns.nbId === fromNb && !ns.pgId) renderCoverBody();
+  if (!quiet) H().toast(ch ? `Moved to "${ch.name}"` : fromNb !== nbId ? `Moved to ${nb.name}` : 'Page moved', { ic: 'folder' });
+}
+function shiftPage(id, dir) {
+  const pg = getPg(id); const g = groupOf(pg); const i = g.indexOf(pg), j = i + dir;
+  if (j < 0 || j >= g.length) return;
+  [g[i], g[j]] = [g[j], g[i]]; renumber(g);
+  afterStructureChange();
+}
+function duplicatePage(id) {
+  if (id === ns.pgId) commitEditor();
+  const src = getPg(id); if (!src) return;
+  const copy = JSON.parse(JSON.stringify(src));
+  Object.assign(copy, { id: nid('pg'), title: (src.title && src.title.trim() ? src.title.trim() : pageLabel(src, pagesOf(src.notebookId).indexOf(src))) + ' (copy)', bookmarked: false, createdAt: Date.now(), updatedAt: Date.now() });
+  delete copy.date;
+  copy.stickies = (copy.stickies || []).map(x => ({ ...x, id: nid('st'), onDesk: false }));
+  copy.images = (copy.images || []).map(x => ({ ...x, id: nid('im') }));
+  const t = document.createElement('template'); t.innerHTML = copy.html || '';
+  $$('[data-task]', t.content).forEach(x => x.removeAttribute('data-task'));
+  $$('.tasked', t.content).forEach(x => x.replaceWith(...x.childNodes));
+  copy.html = t.innerHTML;
+  D().pages.push(copy);
+  placeAfter(copy, src);
+  H().save();
+  turnTo(copy.notebookId, copy.id, 1);
+  H().toast('Page duplicated', { ic: 'copy' });
+}
+function deletePage(id) {
+  if (id === ns.pgId) { actions['pg-delete'](); return; }
+  const pg = getPg(id); if (!pg) return;
+  const snap = H().snapshot();
+  D().pages = D().pages.filter(p => p.id !== id);
+  D().tasks.forEach(t => { if (t.noteRef && t.noteRef.pageId === id) delete t.noteRef; });
+  afterStructureChange();
+  H().undoable('Page deleted', snap, 'trash');
+}
+function toggleRibbon(id) {
+  const pg = getPg(id); if (!pg) return;
+  pg.bookmarked = !pg.bookmarked; touch(pg); H().save();
+  if (id === ns.pgId) { const r = $('#page .ribbon'); if (r) { r.classList.toggle('on', pg.bookmarked); r.title = pg.bookmarked ? 'Remove ribbon' : 'Mark this page with a ribbon'; } }
+  renderShelf();
+  H().toast(pg.bookmarked ? 'Ribbon added: find it under Ribbons' : 'Ribbon removed', { ic: 'ribbon' });
+}
+function saveTemplate(id) {
+  if (id === ns.pgId) commitEditor();
+  const pg = getPg(id); if (!pg) return;
+  const name = (pg.title || '').replace(/[:\s]+$/, '').trim() || 'My template';
+  const t = document.createElement('template'); t.innerHTML = pg.html || '';
+  $$('[data-task]', t.content).forEach(x => x.removeAttribute('data-task'));
+  $$('.tasked', t.content).forEach(x => x.replaceWith(...x.childNodes));
+  $$('ul.checks li.checked', t.content).forEach(x => x.classList.remove('checked'));
+  D().noteTemplates.push({ id: nid('tp'), name, title: pg.title || '', html: t.innerHTML, createdAt: Date.now() });
+  H().save();
+  H().toast(`Saved "${name}" as a template. Find it under + Page.`, { ic: 'template' });
+}
+function newChapter(nbId, pageId) {
+  const nb = getNb(nbId); if (!nb || nb.kind === 'journal') return;
+  nb.chapters = nb.chapters || [];
+  const c = { id: nid('ch'), name: 'New chapter', collapsed: false, order: Math.max(0, ...nb.chapters.map(x => x.order || 0)) + 1 };
+  nb.chapters.push(c);
+  ns.expanded[nbId] = true;
+  if (pageId) movePage(pageId, nbId, c.id, null, true); else afterStructureChange();
+  setTimeout(() => renameChapter(nbId, c.id), 40);
+}
+function removeChapter(nbId, chId, withPages) {
+  const nb = getNb(nbId); const c = (nb.chapters || []).find(x => x.id === chId); if (!c) return;
+  const snap = H().snapshot();
+  const inside = D().pages.filter(p => p.notebookId === nbId && p.chapterId === chId);
+  if (withPages) {
+    const ids = new Set(inside.map(p => p.id));
+    D().pages = D().pages.filter(p => !ids.has(p.id));
+    D().tasks.forEach(t => { if (t.noteRef && ids.has(t.noteRef.pageId)) delete t.noteRef; });
+    nb.chapters = nb.chapters.filter(x => x.id !== chId);
+    if (ids.has(ns.pgId)) { ns.pgId = '__gone__'; H().save(); turnTo(nbId, (pagesOf(nbId)[0] || {}).id || null, -1); }
+    else afterStructureChange();
+    H().undoable(`Deleted "${c.name}" and ${H().plural(inside.length, 'page')}`, snap, 'trash');
+  } else {
+    const loose = pagesOf(nbId).filter(p => !chapterOf(nb, p));
+    nb.chapters = nb.chapters.filter(x => x.id !== chId);
+    inside.sort(byOrd).forEach(p => { p.chapterId = null; loose.push(p); });
+    renumber(loose);
+    afterStructureChange();
+    H().undoable(`Removed chapter "${c.name}" (pages kept)`, snap, 'folder');
+  }
+}
+function shiftChapter(nbId, chId, dir) {
+  const nb = getNb(nbId); const cs = chaptersOf(nb); const i = cs.findIndex(c => c.id === chId), j = i + dir;
+  if (j < 0 || j >= cs.length) return;
+  [cs[i], cs[j]] = [cs[j], cs[i]]; cs.forEach((c, k) => { c.order = k + 1; });
+  afterStructureChange();
+}
+function deleteNotebook(id) {
+  const nb = getNb(id); if (!nb || nb.kind !== 'normal') return;
+  const snap = H().snapshot();
+  const ids = new Set(D().pages.filter(p => p.notebookId === id).map(p => p.id));
+  D().pages = D().pages.filter(p => !ids.has(p.id));
+  D().notebooks = D().notebooks.filter(n => n.id !== id);
+  D().tasks.forEach(t => { if (t.noteRef && ids.has(t.noteRef.pageId)) delete t.noteRef; });
+  if (ns.nbId === id) {
+    const next = notebooks()[0];
+    ns.nbId = '__gone__'; H().save();
+    turnTo(next.id, (pagesOf(next.id)[0] || {}).id || null, -1);
+  } else afterStructureChange();
+  H().undoable(`Deleted "${nb.name}"`, snap, 'trash');
+}
+
+// ---------- inline renaming in the shelf
+function renameInline(rowEl, value, placeholder, onCommit) {
+  if (!rowEl) return;
+  const box = document.createElement('div');
+  box.className = rowEl.className.replace(/\b(active|ctx-on)\b/g, '') + ' renaming';
+  box.innerHTML = `<input class="rename-input" value="${esc(value)}" placeholder="${esc(placeholder)}" maxlength="80" spellcheck="false">`;
+  rowEl.replaceWith(box);
+  const i = box.querySelector('input'); i.focus(); i.select();
+  let done = false;
+  const fin = (ok) => { if (done) return; done = true; if (ok) onCommit(i.value.trim()); renderShelf(); };
+  i.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); fin(true); } if (e.key === 'Escape') { e.stopPropagation(); fin(false); } });
+  i.addEventListener('blur', () => fin(true));
+}
+function revealPageRow(id) {
+  const pg = getPg(id); if (!pg) return null;
+  const nb = getNb(pg.notebookId);
+  ns.expanded[nb.id] = true;
+  const ch = chapterOf(nb, pg); if (ch) ch.collapsed = false;
+  renderShelf();
+  return $(`#shelf .pg-row[data-pg="${id}"]`);
+}
+function renamePage(id) {
+  const pg = getPg(id); if (!pg) return;
+  renameInline(revealPageRow(id), pg.title || '', 'Page title', (v) => {
+    pg.title = v; touch(pg); H().save();
+    if (id === ns.pgId) { const t = $('#page-title'); if (t) t.value = v; renderToolbarOnly(); }
+  });
+}
+function renameChapter(nbId, chId) {
+  const nb = getNb(nbId); const c = (nb.chapters || []).find(x => x.id === chId); if (!c) return;
+  ns.expanded[nbId] = true; renderShelf();
+  renameInline($(`#shelf .chap-row[data-chap="${chId}"]`), c.name, 'Chapter name', (v) => { if (v) { c.name = v; H().save(); refreshDeskChrome(); } });
+}
+function renameNotebook(id) {
+  const nb = getNb(id); if (!nb) return;
+  renameInline($(`#shelf .nb-row[data-nb="${id}"]`), nb.name, 'Notebook name', (v) => {
+    if (!v) return;
+    nb.name = v; nb.updatedAt = Date.now(); H().save();
+    if (id === ns.nbId) { commitEditor(); const keep = $('#desk').scrollTop; renderDesk(); $('#desk').scrollTop = keep; }
+  });
+}
+
+// ---------- menu contents
+function moveTargets(pg) {
+  // every notebook (and its chapters) this page could move to
+  const here = getNb(pg.notebookId);
+  return notebooks().filter(n => n.kind !== 'journal').map(n => {
+    const cs = chaptersOf(n);
+    const isHere = n.id === here.id;
+    if (!cs.length) return { label: n.name + (isHere ? ' (here)' : ''), ic: 'book', disabled: isHere && !chapterOf(here, pg), fn: () => movePage(pg.id, n.id, null) };
+    return { label: n.name + (isHere ? ' (here)' : ''), ic: 'book', sub: [
+      { label: 'No chapter', ic: 'note', disabled: isHere && !chapterOf(here, pg), fn: () => movePage(pg.id, n.id, null) }, '-',
+      ...cs.map(c => ({ label: c.name, ic: 'folder', disabled: c.id === pg.chapterId, fn: () => movePage(pg.id, n.id, c.id) }))
+    ] };
+  });
+}
+function pageMenuItems(pg, fromToolbar) {
+  const nb = getNb(pg.notebookId); const journal = nb.kind === 'journal';
+  const g = groupOf(pg); const gi = g.indexOf(pg);
+  const chaps = chaptersOf(nb); const cur = chapterOf(nb, pg);
+  const others = chaps.filter(c => c.id !== pg.chapterId);
+  return [
+    !fromToolbar && { label: 'Open', ic: 'book', fn: () => turnTo(nb.id, pg.id) },
+    !fromToolbar && !journal && { label: 'Rename', ic: 'edit', fn: () => renamePage(pg.id) },
+    !journal && { label: 'Duplicate page', ic: 'copy', fn: () => duplicatePage(pg.id) },
+    !journal && { label: 'Move up', ic: 'chevronUp', disabled: gi <= 0, fn: () => shiftPage(pg.id, -1) },
+    !journal && { label: 'Move down', ic: 'chevron', disabled: gi >= g.length - 1, fn: () => shiftPage(pg.id, 1) },
+    '-',
+    !journal && { label: cur ? 'Move to chapter' : 'Add to chapter', ic: 'folder', sub: [
+      cur && { label: 'No chapter (loose page)', ic: 'note', fn: () => movePage(pg.id, nb.id, null) },
+      ...others.map(c => ({ label: c.name, ic: 'folder', fn: () => movePage(pg.id, nb.id, c.id) })),
+      (cur || others.length) ? '-' : null,
+      { label: 'New chapter…', ic: 'plus', fn: () => newChapter(nb.id, pg.id) }
+    ] },
+    { label: 'Move to notebook', ic: 'arrowRight', sub: moveTargets(pg) },
+    '-',
+    { label: pg.bookmarked ? 'Remove ribbon' : 'Add ribbon', ic: 'ribbon', fn: () => toggleRibbon(pg.id) },
+    !journal && { label: 'Save as template', ic: 'template', fn: () => saveTemplate(pg.id) },
+    { label: 'Export page as PDF', ic: 'file', fn: () => exportPages(nb, [pg]) },
+    '-',
+    { label: 'Delete page', ic: 'trash', danger: true, fn: () => deletePage(pg.id) }
+  ];
+}
+function chapterMenuItems(nbId, chId) {
+  const nb = getNb(nbId); const cs = chaptersOf(nb); const i = cs.findIndex(c => c.id === chId); const c = cs[i];
+  return [
+    { label: 'Rename chapter', ic: 'edit', fn: () => renameChapter(nbId, chId) },
+    { label: 'New page in this chapter', ic: 'plus', fn: () => actions['pg-new']({ dataset: { nb: nbId, chap: chId } }) },
+    { label: c.collapsed ? 'Expand' : 'Collapse', ic: c.collapsed ? 'chevron' : 'chevronUp', fn: () => { c.collapsed = !c.collapsed; H().save(); renderShelf(); } },
+    { label: 'Move up', ic: 'chevronUp', disabled: i <= 0, fn: () => shiftChapter(nbId, chId, -1) },
+    { label: 'Move down', ic: 'chevron', disabled: i >= cs.length - 1, fn: () => shiftChapter(nbId, chId, 1) },
+    '-',
+    { label: 'Remove chapter (keep pages)', ic: 'folder', fn: () => removeChapter(nbId, chId, false) },
+    { label: 'Delete chapter and its pages', ic: 'trash', danger: true, fn: () => removeChapter(nbId, chId, true) }
+  ];
+}
+function notebookMenuItems(nbId) {
+  const nb = getNb(nbId); const journal = nb.kind === 'journal';
+  return [
+    { label: 'Open', ic: 'book', fn: () => turnTo(nbId, nb.lastPg && getPg(nb.lastPg) ? nb.lastPg : (pagesOf(nbId)[0] || {}).id || null) },
+    !journal && { label: 'Rename notebook', ic: 'edit', fn: () => renameNotebook(nbId) },
+    !journal && { label: 'New page', ic: 'plus', fn: () => actions['pg-new']({ dataset: { nb: nbId } }) },
+    !journal && { label: 'New chapter', ic: 'folder', fn: () => newChapter(nbId) },
+    { label: 'Inside cover & settings', ic: 'sliders', fn: () => turnTo(nbId, null, -1) },
+    { label: 'Export notebook as PDF', ic: 'file', fn: () => exportPages(nb, pagesOf(nbId)) },
+    nb.kind === 'normal' && '-',
+    nb.kind === 'normal' && { label: 'Delete notebook', ic: 'trash', danger: true, fn: () => deleteNotebook(nbId) }
+  ];
+}
+document.addEventListener('contextmenu', (e) => {
+  const inShelf = e.target.closest && e.target.closest('#shelf');
+  if (!inShelf) return;
+  const pr = e.target.closest('.pg-row[data-drag-pg], .pg-row.rib[data-pg]'), cr = e.target.closest('.chap-row'), nr = e.target.closest('.nb-row');
+  const row = pr || cr || nr;
+  if (!row) return;
+  e.preventDefault();
+  closeMenu();
+  row.classList.add('ctx-on');
+  const items = pr ? pageMenuItems(getPg(pr.dataset.dragPg || pr.dataset.pg)) : cr ? chapterMenuItems(cr.dataset.nb, cr.dataset.chap) : notebookMenuItems(nr.dataset.nb);
+  ctxMenu(items, e.clientX, e.clientY);
+  window.Sound && Sound.play('tap');
+});
+
+// ---------- drag pages around the shelf (reorder, into chapters, into other notebooks)
+let sdrag = null, sdragClick = false;
+document.addEventListener('pointerdown', (e) => {
+  const row = e.button === 0 && e.target.closest && e.target.closest('#shelf .pg-row[data-drag-pg]');
+  if (!row) return;
+  const pg = getPg(row.dataset.dragPg); if (!pg || getNb(pg.notebookId).kind === 'journal') return;
+  sdrag = { row, id: pg.id, sx: e.clientX, sy: e.clientY, started: false, pid: e.pointerId };
+});
+document.addEventListener('pointermove', (e) => {
+  if (!sdrag || e.pointerId !== sdrag.pid) return;
+  if (!sdrag.started) {
+    if (Math.hypot(e.clientX - sdrag.sx, e.clientY - sdrag.sy) < 6) return;
+    sdrag.started = true;
+    const r = sdrag.row.getBoundingClientRect();
+    sdrag.ox = e.clientX - r.left; sdrag.oy = e.clientY - r.top;
+    const g = sdrag.row.cloneNode(true); g.className += ' shelf-ghost'; g.style.width = r.width + 'px';
+    document.body.appendChild(g); sdrag.ghost = g;
+    const l = document.createElement('div'); l.className = 'shelf-line'; document.body.appendChild(l); sdrag.line = l;
+    sdrag.row.classList.add('drag-src');
+    document.body.classList.add('dragging-task');
+    window.Sound && Sound.play('lift');
+  }
+  sdrag.ghost.style.transform = `translate(${e.clientX - sdrag.ox}px, ${e.clientY - sdrag.oy}px) rotate(1.5deg)`;
+  $$('#shelf .drop-hover').forEach(x => x.classList.remove('drop-hover'));
+  sdrag.line.style.opacity = 0;
+  sdrag.target = null;
+  const under = document.elementFromPoint(e.clientX, e.clientY);
+  const shelf = $('#shelf');
+  if (!under || !shelf.contains(under)) return;
+  // auto-scroll the shelf near its edges
+  const sr = shelf.getBoundingClientRect();
+  if (e.clientY < sr.top + 40) shelf.scrollTop -= 10; else if (e.clientY > sr.bottom - 40) shelf.scrollTop += 10;
+  const pr = under.closest('.pg-row[data-drag-pg]'), cr = under.closest('.chap-row'), cp = under.closest('.chap-pages'), nr = under.closest('.nb-row');
+  if (pr && pr.dataset.dragPg !== sdrag.id) {
+    const tp = getPg(pr.dataset.dragPg), tnb = getNb(tp.notebookId);
+    if (tnb.kind === 'journal') return;
+    const r = pr.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
+    const g = groupOf(tp), i = g.indexOf(tp);
+    let before = after ? (g[i + 1] || {}).id || null : tp.id;
+    if (before === sdrag.id) before = (g[i + 2] || {}).id || null;
+    sdrag.target = { nb: tnb.id, chap: chapterOf(tnb, tp) ? tp.chapterId : null, before };
+    const L = sdrag.line; L.style.left = r.left + 6 + 'px'; L.style.width = r.width - 12 + 'px'; L.style.top = (after ? r.bottom : r.top) - 1 + 'px'; L.style.opacity = 1;
+  } else if (cr || cp) {
+    const el = cr || cp; const nbId = el.dataset.nb, ch = el.dataset.chap || el.dataset.chapDrop;
+    (cr || cp.parentElement.querySelector('.chap-row')).classList.add('drop-hover');
+    sdrag.target = { nb: nbId, chap: ch, before: null };
+  } else if (nr) {
+    const nb = getNb(nr.dataset.nb); if (nb.kind === 'journal') return;
+    nr.classList.add('drop-hover');
+    sdrag.target = { nb: nb.id, chap: null, before: null };
+  }
+});
+function endShelfDrag(commit) {
+  const d = sdrag; sdrag = null; if (!d || !d.started) return;
+  document.body.classList.remove('dragging-task');
+  d.ghost.remove(); d.line.remove(); d.row.classList.remove('drag-src');
+  $$('#shelf .drop-hover').forEach(x => x.classList.remove('drop-hover'));
+  sdragClick = true; setTimeout(() => { sdragClick = false; }, 80);
+  if (commit && d.target) { movePage(d.id, d.target.nb, d.target.chap, d.target.before, true); window.Sound && Sound.play('drop'); }
+}
+document.addEventListener('pointerup', (e) => { if (sdrag && e.pointerId === sdrag.pid) { if (sdrag.started) endShelfDrag(true); else sdrag = null; } });
+document.addEventListener('pointercancel', () => endShelfDrag(false));
+document.addEventListener('click', (e) => { if (sdragClick && e.target.closest && e.target.closest('#shelf')) { e.stopPropagation(); e.preventDefault(); sdragClick = false; } }, true);
+
+// ---------- show / hide the notebook shelf
+function toggleShelf() {
+  ns.shelfHidden = !ns.shelfHidden;
+  const n = $('#notes'); if (n) n.classList.toggle('shelf-hidden', ns.shelfHidden);
+  persist(); renderToolbarOnly();
+}
+document.addEventListener('keydown', (e) => {
+  if (H().state.view !== 'notes') return;
+  if (e.ctrlKey && e.shiftKey && (e.key === '\\' || e.code === 'Backslash')) { e.preventDefault(); toggleShelf(); }
+});
 
 // ------------------------------------------------------------------ entry points used by the rest of Hearth
 function open(nbId, pgId) {

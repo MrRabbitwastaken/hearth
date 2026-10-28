@@ -1,7 +1,7 @@
 {
   "name": "hearth",
   "productName": "Hearth",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "A warm little work assistant: daily tasks, projects, calendar, notebooks, screen breaks and focus time.",
   "main": "src/main.js",
   "author": "Jake",
@@ -9,7 +9,7 @@
   "scripts": {
     "start": "electron .",
     "package": "electron-packager . Hearth --platform=win32 --arch=x64 --out=dist --overwrite --asar --icon=build/icon.ico --ignore=\"^/dist\" --ignore=\"^/\\.tools\" --ignore=\"^/\\.github\" --ignore=\"^/build\" --ignore=\"\\.bat$\" --app-copyright=\"Hearth\" --win32metadata.ProductName=Hearth --win32metadata.FileDescription=Hearth --win32metadata.CompanyName=Hearth",
-    "dist": "npm run package && electron-builder --win nsis --x64 --prepackaged dist/Hearth-win32-x64 --publish never"
+    "dist": "npm run package && electron-builder --win --x64 --prepackaged dist/Hearth-win32-x64 --publish never"
   },
   "build": {
     "appId": "com.hearth.workassistant",
@@ -20,10 +20,22 @@
       "buildResources": "build"
     },
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "build/icon.ico",
-      "signAndEditExecutable": false,
-      "artifactName": "Hearth-Setup-${version}.exe"
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,
@@ -41,7 +53,13 @@
       "uninstallerSidebar": "build/installerSidebar.bmp",
       "installerHeader": "build/installerHeader.bmp",
       "runAfterFinish": true,
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "Hearth-Setup-${version}.exe"
+    },
+    "portable": {
+      "artifactName": "Hearth-Portable-${version}.exe",
+      "unpackDirName": "HearthPortable",
+      "requestExecutionLevel": "user"
     }
   },
   "dependencies": {

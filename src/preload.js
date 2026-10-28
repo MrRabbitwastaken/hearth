@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('hearth', {
   closeCapture: () => ipcRenderer.invoke('app:closeCapture'),
   hotkeyOk: () => ipcRenderer.invoke('app:hotkeyOk'),
   dataPath: () => ipcRenderer.invoke('app:dataPath'),
+  appInfo: () => ipcRenderer.invoke('app:info'),
   exportData: () => ipcRenderer.invoke('app:export'),
   importData: () => ipcRenderer.invoke('app:import')
 });

@@ -3,7 +3,7 @@
 
 const {
   app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, Notification,
-  powerMonitor, shell, nativeImage, clipboard, dialog, screen
+  powerMonitor, shell, nativeImage, clipboard, dialog, screen, protocol, net
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -13,6 +13,24 @@ const { inboxSticky } = require('./shared/inbox.js');
 
 const APP_ID = 'com.hearth.workassistant';
 const ASSETS = path.join(__dirname, 'assets');
+
+// ---------- portable mode ----------
+// Hearth-Portable.exe sets PORTABLE_EXECUTABLE_DIR. A "Hearth Data" folder next to Hearth.exe also
+// switches it on, so an unzipped copy can live on a USB stick too. Everything is kept in that folder.
+const exeDir = path.dirname(process.execPath);
+const PORTABLE_DIR = process.env.PORTABLE_EXECUTABLE_DIR ||
+  (app.isPackaged && fs.existsSync(path.join(exeDir, 'Hearth Data')) ? exeDir : null);
+const PORTABLE = !!PORTABLE_DIR;
+if (PORTABLE) {
+  const dir = path.join(PORTABLE_DIR, 'Hearth Data');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
+  app.setPath('userData', dir);
+  app.setPath('sessionData', path.join(dir, 'Browser'));
+}
+
+// pictures are referenced as hearth://img/<file>, so they still work when the drive letter changes
+protocol.registerSchemesAsPrivileged([{ scheme: 'hearth', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
+const imagesDir = () => path.join(app.getPath('userData'), 'images');
 
 // ---------- single instance ----------
 if (!app.requestSingleInstanceLock()) {
@@ -58,7 +76,9 @@ function defaultData() {
 
 function loadData() {
   try {
-    const raw = fs.readFileSync(dataFile(), 'utf8');
+    let raw = fs.readFileSync(dataFile(), 'utf8');
+    // older versions stored pictures as absolute file:// paths; make them portable
+    raw = raw.replace(/file:\/\/\/[^"'\\\s)<>]*?\/images\/(img-[A-Za-z0-9-]+\.(?:png|jpe?g|gif|webp))/g, 'hearth://img/$1');
     const parsed = JSON.parse(raw);
     const def = defaultData();
     data = { ...def, ...parsed, settings: { ...def.settings, ...(parsed.settings || {}) } };
@@ -324,7 +344,7 @@ function createTray() {
 }
 
 function applyStartup() {
-  if (!app.isPackaged) return; // only register the real .exe
+  if (!app.isPackaged || PORTABLE) return; // only register an installed copy
   app.setLoginItemSettings({
     openAtLogin: !!data.settings.launchAtStartup,
     args: ['--hidden']
@@ -333,8 +353,17 @@ function applyStartup() {
 
 // Windows only shows toast notifications for apps that have a Start Menu
 // shortcut carrying their AppUserModelID, so create one on first run.
+const portableLnk = () => path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Hearth (portable).lnk');
 function ensureStartMenuShortcut() {
   if (process.platform !== 'win32' || !app.isPackaged) return;
+  if (PORTABLE) {
+    // a temporary shortcut so Windows will show Hearth's notifications; removed again on quit
+    try {
+      const target = process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
+      shell.writeShortcutLink(portableLnk(), fs.existsSync(portableLnk()) ? 'replace' : 'create', { target, appUserModelId: APP_ID, description: 'Hearth (portable)', icon: process.execPath, iconIndex: 0 });
+    } catch (_) {}
+    return;
+  }
   try {
     const lnk = path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Hearth.lnk');
     const opts = { target: process.execPath, appUserModelId: APP_ID, description: 'Hearth work assistant', icon: process.execPath, iconIndex: 0 };
@@ -403,11 +432,11 @@ ipcMain.handle('store:addSticky', (e, st) => {
 ipcMain.handle('notes:saveImage', (e, dataUrl) => {
   const m = /^data:image\/(png|jpe?g|gif|webp);base64,(.+)$/i.exec(String(dataUrl));
   if (!m) return null;
-  const dir = path.join(app.getPath('userData'), 'images');
+  const dir = imagesDir();
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `img-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}.${m[1].toLowerCase().replace('jpeg', 'jpg')}`);
   fs.writeFileSync(file, Buffer.from(m[2], 'base64'));
-  return pathToFileURL(file).href;
+  return 'hearth://img/' + path.basename(file);
 });
 ipcMain.handle('notes:pdf', async (e, { html, name }) => {
   const tmp = path.join(app.getPath('userData'), 'print-preview.html');
@@ -463,6 +492,7 @@ ipcMain.handle('app:focusShield', (e, on) => { focusShield = !!on; return true; 
 ipcMain.handle('app:closeCapture', () => { if (captureWindow) captureWindow.close(); return true; });
 ipcMain.handle('app:hotkeyOk', () => registerHotkey());
 ipcMain.handle('app:dataPath', () => dataFile());
+ipcMain.handle('app:info', () => ({ portable: PORTABLE, portableDir: PORTABLE_DIR, version: app.getVersion() }));
 ipcMain.handle('app:export', async () => {
   const res = await dialog.showSaveDialog(mainWindow, {
     title: 'Export Hearth data',
@@ -470,7 +500,12 @@ ipcMain.handle('app:export', async () => {
     filters: [{ name: 'JSON', extensions: ['json'] }]
   });
   if (res.canceled || !res.filePath) return false;
-  fs.writeFileSync(res.filePath, JSON.stringify(data, null, 2), 'utf8');
+  // pictures travel inside the backup, so a restore on another PC (or the portable copy) is complete
+  const json = JSON.stringify(data);
+  const names = [...new Set([...json.matchAll(/hearth:\/\/img\/(img-[A-Za-z0-9-]+\.(?:png|jpe?g|gif|webp))/g)].map(m => m[1]))];
+  const images = {};
+  for (const n of names) { try { images[n] = fs.readFileSync(path.join(imagesDir(), n)).toString('base64'); } catch (_) {} }
+  fs.writeFileSync(res.filePath, JSON.stringify({ ...data, _images: images }, null, 2), 'utf8');
   return true;
 });
 ipcMain.handle('app:import', async () => {
@@ -483,6 +518,13 @@ ipcMain.handle('app:import', async () => {
   try {
     const parsed = JSON.parse(fs.readFileSync(res.filePaths[0], 'utf8'));
     if (!Array.isArray(parsed.tasks)) throw new Error('Not a Hearth file');
+    if (parsed._images && typeof parsed._images === 'object') {
+      fs.mkdirSync(imagesDir(), { recursive: true });
+      for (const [n, b64] of Object.entries(parsed._images)) {
+        if (/^img-[A-Za-z0-9-]+\.(png|jpe?g|gif|webp)$/.test(n)) fs.writeFileSync(path.join(imagesDir(), n), Buffer.from(String(b64), 'base64'));
+      }
+    }
+    delete parsed._images;
     writeNow();
     const def = defaultData();
     data = { ...def, ...parsed, settings: { ...def.settings, ...(parsed.settings || {}) } };
@@ -500,6 +542,12 @@ app.setAppUserModelId(APP_ID);
 app.on('second-instance', () => showMain());
 
 app.whenReady().then(() => {
+  protocol.handle('hearth', (req) => {
+    const u = new URL(req.url);
+    if (u.host !== 'img') return new Response('Not found', { status: 404 });
+    const file = path.join(imagesDir(), path.basename(decodeURIComponent(u.pathname)));
+    return net.fetch(pathToFileURL(file).href);
+  });
   restoreDndSync(); // in case Hearth was closed mid-focus
   loadData();
   createMainWindow();
@@ -517,6 +565,9 @@ app.whenReady().then(() => {
   setInterval(tickBreak, 5000);
 });
 
-app.on('before-quit', () => { quitting = true; writeNow(); restoreDndSync(); });
+app.on('before-quit', () => {
+  quitting = true; writeNow(); restoreDndSync();
+  if (PORTABLE) { try { fs.unlinkSync(portableLnk()); } catch (_) {} }
+});
 app.on('will-quit', () => globalShortcut.unregisterAll());
 app.on('window-all-closed', () => { /* keep running in the tray */ });

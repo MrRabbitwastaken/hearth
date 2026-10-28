@@ -22,15 +22,22 @@ jobs:
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
-          name: Hearth-Setup
-          path: dist/Hearth-Setup-*.exe
+          name: Hearth-Windows
+          path: |
+            dist/Hearth-Setup-*.exe
+            dist/Hearth-Portable-*.exe
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.ver.outputs.version }}
           name: Hearth ${{ steps.ver.outputs.version }}
           body: |
-            Download **Hearth-Setup-${{ steps.ver.outputs.version }}.exe** below and double-click it to install.
+            **Hearth-Setup-${{ steps.ver.outputs.version }}.exe**: the installer. Double-click to install.
             Silent install (e.g. NinjaOne): `Hearth-Setup-${{ steps.ver.outputs.version }}.exe /S` (add `/allusers` for every user).
-          files: dist/Hearth-Setup-*.exe
+
+            **Hearth-Portable-${{ steps.ver.outputs.version }}.exe**: the portable version. Copy it onto a USB stick and run it from there.
+            Your data is kept in a "Hearth Data" folder beside it, so it moves with you between PCs.
+          files: |
+            dist/Hearth-Setup-*.exe
+            dist/Hearth-Portable-*.exe
           make_latest: true

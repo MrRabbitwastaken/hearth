@@ -4,6 +4,13 @@ A Windows desktop app for daily tasks, projects, a calendar, notebooks, screen b
 
 ## Installing
 
+Grab the latest files from the **Releases** page on GitHub. Every push to `main` builds them automatically.
+
+- **Hearth-Setup-x.y.z.exe**: the normal installer.
+- **Hearth-Portable-x.y.z.exe**: the portable version. Copy it to a USB stick (or any folder) and run it from there. It keeps everything in a **Hearth Data** folder beside it, so your tasks, notes and pictures travel with you. It doesn't install anything or start with Windows, and on quit it removes the temporary Start-menu shortcut it uses for notifications. To move your existing data onto the stick, use Settings → Export in the installed copy, then Settings → Import in the portable one. Pictures are included in the backup.
+
+### Building it yourself
+
 **Make the installer once:** double-click **`Make-Installer.bat`**. You don't need to install anything first. If Node.js isn't on the PC, the script downloads a private copy into a `.tools` folder, used only for building. After a few minutes it opens `dist\` with **`Hearth-Setup-1.1.0.exe`**.
 
 **Install:** double-click `Hearth-Setup-1.1.0.exe`. A setup wizard lets you choose just-me or all users and the install folder. It creates Start menu and desktop shortcuts, launches Hearth when it finishes, and adds an uninstaller in Windows *Apps*.
@@ -37,20 +44,22 @@ Your data is kept when you install a newer version over the top.
 - Water nudges with a glass tracker, and posture checks.
 - A *good-day score* (tasks, focus, breaks and water) with a streak. Weekends don't break the streak.
 
-**Notebooks**: pages that turn, pencil handwriting, sticky notes you can drag about, pencil and highlighter, pasted images and links, highlight text → task, ribbons, journal, search and PDF export.
+**Notebooks**: pages that turn (click any line on a page to start writing there), pencil handwriting, sticky notes you can drag about, pencil and highlighter, pasted images and links, highlight text → task, ribbons, journal, search and PDF export.
 - **Templates**: meeting, 1:1, incident report, change request, project kick-off, stand-up and checklist. You can also save any page as your own template.
+- **Pictures** are taped onto the page. Drag them anywhere, pull the corner to resize, double-click to view full size.
+- **Organise the shelf**: right-click a page for Rename, Duplicate, Move up/down, Add to chapter / New chapter…, Move to notebook, Ribbon, Save as template, Export, and Delete. Chapters work like sub-folders: they collapse, and you can right-click one to rename, add a page, reorder or remove it. You can also drag pages around the shelf, into chapters or into other notebooks. Right-click a notebook to rename it, add pages or chapters, export or delete.
 - **Checklists** tick like real boxes. Type `[] ` at the start of a line or use the checklist button.
 
 **Plus**: projects, Waiting on, recurring tasks (with optional times), snippets & links, a weekly review with a copyable summary, morning brief, end-of-day wrap-up, and quick capture with **Ctrl+Alt+Space** (Tab switches between task and sticky note).
 
 **Make it yours (Settings)**:
-- Show, hide or reorder sidebar pages.
+- Show, hide or reorder sidebar pages, or shrink the sidebar to icons only.
 - Daylight or Evening theme.
 - **Seasonal themes** (Auto, Autumn, Winter, Spring, Summer) with drifting leaves, snow, petals or sun motes.
 - **Sound effects** (pencil ticks, page rustles, sticky pats, chimes, a break bell), with volume and mute (the speaker icon by the logo).
 - Calendar hours, wellbeing intervals and smart-add options.
 
-**Shortcuts**: **N** new task · **Ctrl+1…9** switch pages · **Alt+←/→** turn notebook pages · **Esc** close panels.
+**Shortcuts**: **N** new task · **Ctrl+1…9** switch pages · **Ctrl+\\** compact menu (icons only) · **Ctrl+Shift+\\** hide the notebook shelf · **Alt+←/→** turn notebook pages · **Esc** close panels.
 
 ## Your data
 

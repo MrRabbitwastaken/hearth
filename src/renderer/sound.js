@@ -121,18 +121,44 @@ function play(name, gain = 1) {
 }
 
 // ------------------------------------------------------------------ ambient soundscapes
-const amb = { name: null, nodes: [], timers: [] };
+const amb = { name: null, nodes: [], timers: [], dry: null, wet: null };
 const SOUNDSCAPES = {
   rain: { label: 'Rain', ic: 'rain' },
   cafe: { label: 'Café', ic: 'coffee' },
   fire: { label: 'Fireside', ic: 'flame' },
   waves: { label: 'Waves', ic: 'waves' }
 };
-function loop(buf, filters, gain) {
+let roomIR = null;
+function room(seconds = 1.6, decay = 3.2) {
+  // a soft, diffuse room reverb made from decaying noise
+  const len = Math.floor(ctx.sampleRate * seconds);
+  const ir = ctx.createBuffer(2, len, ctx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = ir.getChannelData(ch);
+    let lp = 0;
+    for (let i = 0; i < len; i++) {
+      const t = i / len;
+      lp = lp * .6 + (Math.random() * 2 - 1) * .4;        // darken the tail a little
+      d[i] = lp * Math.pow(1 - t, decay) * (i < 90 ? i / 90 : 1);
+    }
+  }
+  return ir;
+}
+function busOut(node, wetAmt = 0, pan = 0) {
+  // route a source to the dry mix, optionally with reverb and stereo position
+  let out = node;
+  if (pan && ctx.createStereoPanner) { const p = ctx.createStereoPanner(); p.pan.value = pan; out.connect(p); out = p; }
+  out.connect(amb.dry);
+  if (wetAmt) { const s = ctx.createGain(); s.gain.value = wetAmt; out.connect(s); s.connect(amb.wet); }
+  return out;
+}
+function loop(buf, filters, gain, wet = 0, pan = 0) {
   const src = ctx.createBufferSource(); src.buffer = buffers[buf]; src.loop = true;
+  src.playbackRate.value = .97 + Math.random() * .06;
   let node = src;
   filters.forEach(([type, f, q]) => { const fl = ctx.createBiquadFilter(); fl.type = type; fl.frequency.value = f; if (q) fl.Q.value = q; node.connect(fl); node = fl; });
-  const g = ctx.createGain(); g.gain.value = gain; node.connect(g); g.connect(ambBus);
+  const g = ctx.createGain(); g.gain.value = gain; node.connect(g);
+  busOut(g, wet, pan);
   src.start(0, Math.random() * 2);
   amb.nodes.push(src);
   return g;
@@ -144,27 +170,150 @@ function lfo(param, rate, depth, base) {
   amb.nodes.push(o);
 }
 function every(ms, jitter, fn) {
-  const go = () => { if (!amb.name) return; fn(ctx.currentTime + .02); amb.timers.push(setTimeout(go, ms + Math.random() * jitter)); };
-  amb.timers.push(setTimeout(go, Math.random() * ms));
+  const go = () => { if (!amb.name) return; fn(ctx.currentTime + .03); amb.timers.push(setTimeout(go, ms + Math.random() * jitter)); };
+  amb.timers.push(setTimeout(go, Math.random() * (ms + jitter)));
+}
+// a slow, organic random wander for a parameter (smoother and less "wobbly" than a sine LFO)
+function wander(param, lo, hi, everyMs, tau) {
+  every(everyMs * .6, everyMs * .8, (t) => param.setTargetAtTime(lo + Math.random() * (hi - lo), t, tau));
+}
+const rnd = (a, b) => a + Math.random() * (b - a);
+
+// one short noise "event" with an instant attack and exponential decay, filtered and panned
+function burst(t, { dur = .01, freq = 2000, q = 1, gain = .1, type = 'bandpass', pan = 0, wet = 0, buf = 'white', lp = 0 }) {
+  const src = ctx.createBufferSource(); src.buffer = buffers[buf];
+  const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+  let node = f;
+  src.connect(f);
+  if (lp) { const l = ctx.createBiquadFilter(); l.type = 'lowpass'; l.frequency.value = lp; f.connect(l); node = l; }
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+  node.connect(g);
+  busOut(g, wet, pan);
+  src.start(t, Math.random() * 2.5); src.stop(t + dur + .02);
+}
+function partials(t, f0, ratios, { gain = .03, decay = .4, pan = 0, wet = .3 }) {
+  // bell-like ring (cups, spoons, glass)
+  const g = ctx.createGain(); g.gain.value = 1; busOut(g, wet, pan);
+  ratios.forEach((r, i) => {
+    const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f0 * r;
+    const e = ctx.createGain();
+    const pk = gain / (1 + i * .9), d = decay / (1 + i * .5);
+    e.gain.setValueAtTime(.0001, t); e.gain.exponentialRampToValueAtTime(pk, t + .002); e.gain.exponentialRampToValueAtTime(.0001, t + d);
+    o.connect(e); e.connect(g); o.start(t); o.stop(t + d + .05);
+  });
+}
+
+// ---------- café: distant murmur of conversations, the room's hum, cups and saucers, the odd hiss of steam
+function talker(pan) {
+  // one distant voice: a buzzy source through two moving vowel formants, gated into syllables and phrases
+  const o = ctx.createOscillator(); o.type = 'sawtooth';
+  const f0 = rnd(95, 220); o.frequency.value = f0;
+  const breath = ctx.createBufferSource(); breath.buffer = buffers.pink; breath.loop = true;
+  const bg = ctx.createGain(); bg.gain.value = .35; breath.connect(bg);
+  const src = ctx.createGain(); src.gain.value = .5; o.connect(src); bg.connect(src);
+  const f1 = ctx.createBiquadFilter(); f1.type = 'bandpass'; f1.Q.value = 5; f1.frequency.value = 500;
+  const f2 = ctx.createBiquadFilter(); f2.type = 'bandpass'; f2.Q.value = 7; f2.frequency.value = 1400;
+  const mix = ctx.createGain(); mix.gain.value = 1;
+  src.connect(f1); src.connect(f2);
+  const g2 = ctx.createGain(); g2.gain.value = .55; f2.connect(g2);
+  f1.connect(mix); g2.connect(mix);
+  const muffle = ctx.createBiquadFilter(); muffle.type = 'lowpass'; muffle.frequency.value = rnd(1300, 1900);
+  const env = ctx.createGain(); env.gain.value = 0;
+  const level = ctx.createGain(); level.gain.value = rnd(.05, .09);
+  mix.connect(muffle); muffle.connect(env); env.connect(level);
+  busOut(level, .85, pan);
+  o.start(); breath.start(0, Math.random() * 2);
+  amb.nodes.push(o, breath);
+  const VOW = [[300, 2300], [400, 2000], [550, 1700], [700, 1200], [500, 900], [350, 800], [650, 1500]];
+  let speaking = Math.random() < .5;
+  const tick = () => {
+    if (!amb.name) return;
+    const t = ctx.currentTime + .02;
+    if (speaking) {
+      const v = VOW[Math.floor(Math.random() * VOW.length)];
+      f1.frequency.setTargetAtTime(v[0] * rnd(.9, 1.1), t, .03);
+      f2.frequency.setTargetAtTime(v[1] * rnd(.9, 1.1), t, .03);
+      o.frequency.setTargetAtTime(f0 * rnd(.85, 1.25), t, .06);
+      const syl = rnd(.09, .22);
+      env.gain.setTargetAtTime(rnd(.5, 1), t, .015);
+      env.gain.setTargetAtTime(rnd(0, .25), t + syl, .03);
+      if (Math.random() < .07) speaking = false;           // end of a phrase
+      amb.timers.push(setTimeout(tick, (syl + rnd(.02, .08)) * 1000));
+    } else {
+      env.gain.setTargetAtTime(0, t, .08);
+      speaking = true;
+      amb.timers.push(setTimeout(tick, rnd(600, 2600)));
+    }
+  };
+  amb.timers.push(setTimeout(tick, Math.random() * 1500));
+}
+function clink(t, pan) {
+  const f = rnd(2300, 3600);
+  partials(t, f, [1, 2.32, 4.25, 6.6], { gain: rnd(.012, .03), decay: rnd(.25, .6), pan, wet: .5 });
+  burst(t, { dur: .012, freq: f * 1.3, q: 3, gain: .02, pan, wet: .3 });
 }
 const BUILD = {
   rain() {
     loop('pink', [['highpass', 400], ['lowpass', 5200]], .55);
     const g = loop('white', [['bandpass', 2600, .5]], .08); lfo(g.gain, .07, .03, .08);
     loop('brown', [['lowpass', 300]], .25);
-    every(55, 90, (t) => noiseHit(t, { freq: 2500 + Math.random() * 3500, q: 3, peak: .02 + Math.random() * .05, d: .02 + Math.random() * .03, dest: ambBus }));
+    every(55, 90, (t) => burst(t, { freq: 2500 + Math.random() * 3500, q: 3, gain: .02 + Math.random() * .05, dur: .02 + Math.random() * .03, pan: rnd(-.6, .6) }));
   },
   cafe() {
-    const hum = loop('brown', [['lowpass', 520]], .55); lfo(hum.gain, .13, .12, .5);
-    const talk = loop('pink', [['bandpass', 650, 1.2]], .18); lfo(talk.gain, .4, .08, .16);
-    every(1800, 4200, (t) => { const f = 2400 + Math.random() * 2600; tone(t, { freq: f, peak: .018 + Math.random() * .02, d: .25, dest: ambBus }); tone(t + .06, { freq: f * 1.5, peak: .01, d: .2, dest: ambBus }); });
-    every(5200, 7000, (t) => noiseHit(t, { buf: 'pink', freq: 900, q: .6, peak: .05, d: .25, dest: ambBus }));
+    // room tone & air handling
+    const hum = loop('brown', [['lowpass', 260]], .32); wander(hum.gain, .25, .38, 4000, 1.5);
+    loop('pink', [['bandpass', 180, .8]], .06);
+    // the general hubbub: band-limited noise that swells and settles like a room full of chat
+    const crowd = loop('pink', [['bandpass', 520, .9], ['lowpass', 1600]], .07, .9);
+    wander(crowd.gain, .045, .1, 1800, .6);
+    const crowd2 = loop('pink', [['bandpass', 1100, 1.4]], .025, .9, .4);
+    wander(crowd2.gain, .01, .035, 900, .25);
+    // individual distant voices, spread across the room
+    [-.7, -.35, -.1, .2, .45, .75].forEach(talker);
+    // cups, saucers and spoons
+    every(2200, 5200, (t) => { const pan = rnd(-.8, .8); clink(t, pan); if (Math.random() < .35) clink(t + rnd(.12, .3), pan); });
+    // a spoon stirring now and then
+    every(14000, 16000, (t) => { const pan = rnd(-.6, .6), n = 4 + Math.floor(Math.random() * 5); for (let i = 0; i < n; i++) partials(t + i * rnd(.11, .16), rnd(3400, 4200), [1, 2.7], { gain: .008, decay: .12, pan, wet: .4 }); });
+    // cup set down on a saucer (a soft knock)
+    every(6000, 9000, (t) => { const pan = rnd(-.7, .7); burst(t, { buf: 'pink', type: 'lowpass', freq: 900, gain: .06, dur: .07, pan, wet: .5 }); partials(t, rnd(900, 1300), [1, 2.1], { gain: .012, decay: .18, pan, wet: .5 }); });
+    // the espresso machine's steam wand, occasionally
+    every(38000, 40000, (t) => {
+      const src = ctx.createBufferSource(); src.buffer = buffers.white; src.loop = true;
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 4200; f.Q.value = .8;
+      const g = ctx.createGain(); const len = rnd(3, 6);
+      g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.022, t + .5);
+      g.gain.setTargetAtTime(.016, t + .6, 1); g.gain.setTargetAtTime(.0001, t + len, .3);
+      src.connect(f); f.connect(g); busOut(g, .6, rnd(.3, .8));
+      src.start(t); src.stop(t + len + 2);
+    });
   },
   fire() {
-    const roar = loop('brown', [['lowpass', 380]], .7); lfo(roar.gain, .23, .15, .62);
-    loop('pink', [['bandpass', 1100, .7]], .05);
-    every(70, 260, (t) => { const n = 1 + Math.floor(Math.random() * 3); for (let i = 0; i < n; i++) noiseHit(t + i * .012, { type: 'highpass', freq: 1800 + Math.random() * 3000, peak: .04 + Math.random() * .14, d: .006 + Math.random() * .02, dest: ambBus }); });
-    every(1400, 2400, (t) => noiseHit(t, { buf: 'brown', type: 'lowpass', freq: 600, peak: .25, d: .2, dest: ambBus }));
+    // the body of the fire: a deep, breathing roar that never quite settles
+    const roar = loop('brown', [['lowpass', 170, .7]], .55);
+    wander(roar.gain, .38, .72, 700, .25);
+    const breath = loop('pink', [['bandpass', 420, .7]], .1, .2);
+    wander(breath.gain, .04, .14, 1100, .4);
+    // a quiet hiss of gas and sap
+    const hiss = loop('white', [['highpass', 2800], ['lowpass', 7500]], .012, .2);
+    wander(hiss.gain, .004, .02, 1500, .5);
+    // crackles: mostly tiny ticks with the odd sharper snap, softened so nothing is harsh
+    const crackle = (t, big) => {
+      const amp = big ? rnd(.18, .32) : .015 + .16 * Math.pow(Math.random(), 3.2);
+      burst(t, { dur: big ? rnd(.02, .045) : rnd(.003, .014), freq: rnd(900, 3800), q: rnd(.7, 1.6), gain: amp, pan: rnd(-.5, .5), wet: .15, lp: 6500 });
+    };
+    every(70, 240, (t) => crackle(t, false));
+    // little flurries of popping, like resin catching
+    every(2500, 5000, (t) => { const n = 3 + Math.floor(Math.random() * 9); let tt = t; for (let i = 0; i < n; i++) { tt += rnd(.015, .09); crackle(tt, false); } });
+    // a log shifting: a deeper thump with a snap
+    every(4500, 9000, (t) => {
+      crackle(t, true);
+      const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(rnd(85, 130), t); o.frequency.exponentialRampToValueAtTime(55, t + .2);
+      const g = ctx.createGain(); g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.12, t + .006); g.gain.exponentialRampToValueAtTime(.0001, t + .22);
+      o.connect(g); busOut(g, .2, rnd(-.3, .3)); o.start(t); o.stop(t + .3);
+      burst(t, { buf: 'brown', type: 'lowpass', freq: 500, gain: .3, dur: .25, wet: .2 });
+    });
   },
   waves() {
     const sea = loop('pink', [['lowpass', 900]], .5); lfo(sea.gain, .085, .42, .48);
@@ -177,6 +326,13 @@ function ambient(name) {
   if (!name || !BUILD[name]) return;
   if (!ensure()) return;
   amb.name = name;
+  amb.dry = ctx.createGain(); amb.dry.connect(ambBus);
+  amb.wet = ctx.createConvolver();
+  if (!roomIR) roomIR = room();
+  amb.wet.buffer = roomIR;
+  const wetGain = ctx.createGain(); wetGain.gain.value = name === 'cafe' ? .9 : .5;
+  amb.wet.connect(wetGain); wetGain.connect(ambBus);
+  amb.nodes.push({ stop: () => { try { amb.dry.disconnect(); } catch (e) {} } });
   BUILD[name]();
   ambBus.gain.cancelScheduledValues(ctx.currentTime);
   ambBus.gain.setValueAtTime(0.0001, ctx.currentTime);
@@ -192,8 +348,10 @@ function stopAmbient(fast) {
   ambBus.gain.cancelScheduledValues(t);
   ambBus.gain.setValueAtTime(ambBus.gain.value, t);
   ambBus.gain.linearRampToValueAtTime(0.0001, t + fade);
-  nodes.forEach(n => { try { n.stop(t + fade + .05); } catch (e) {} });
+  const dry = amb.dry, wet = amb.wet; amb.dry = amb.wet = null;
+  nodes.forEach(n => { try { if (n.start) n.stop(t + fade + .05); } catch (e) {} });
+  setTimeout(() => { try { dry && dry.disconnect(); wet && wet.disconnect(); } catch (e) {} }, (fade + .2) * 1000);
 }
 
-window.Sound = { play, ambient, stopAmbient, applyVolumes, SOUNDSCAPES, current: () => amb.name };
+window.Sound = { play, ambient, stopAmbient, applyVolumes, SOUNDSCAPES, current: () => amb.name, _ctx: () => ctx, _bus: () => ambBus };
 })();

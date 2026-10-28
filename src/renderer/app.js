@@ -155,7 +155,7 @@ const state = {
   view: 'today', entering: true, day: today(),
   addWhen: 'today', addProject: '', showDone: false, showTomorrow: true, showUpcoming: false,
   projectFilter: 'active', snipQuery: '', snipForm: null, recForm: { freq: 'weekdays', days: [1], dom: 1 },
-  weekOffset: 0, modal: null, breakOpen: false, pendingBreak: false,
+  weekOffset: 0, modal: null, breakOpen: false, pendingBreak: false, appInfo: {},
   filter: { tag: null, prio: 0 }, lastWater: Date.now(), lastPosture: Date.now(),
   brk: { status: { activeSeconds: 0, intervalSeconds: 3600, snoozedUntil: 0, due: false, away: false }, at: Date.now() }
 };
@@ -310,7 +310,17 @@ function toast(msg, { ic = 'check', action = null, timeout = 4200 } = {}) {
 function undoable(msg, snap, ic = 'check') { toast(msg, { ic, action: { label: 'Undo', fn: () => restore(snap) } }); }
 
 // ------------------------------------------------------------------ theme
+function applyNav() {
+  document.documentElement.classList.toggle('nav-collapsed', !!D.settings.navCollapsed);
+}
+function toggleNav() {
+  D.settings.navCollapsed = !D.settings.navCollapsed;
+  applyNav(); save(); buildSidebar(); updateSidebar();
+  setTimeout(updateSidebar, 450);
+  if (state.view === 'settings') refresh();
+}
 function applyTheme() {
+  applyNav();
   const pref = D.settings.theme || 'light';
   const dark = pref === 'dark' || (pref === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
@@ -351,6 +361,7 @@ function buildSidebar() {
       ${ids.slice(0, -1).map(item).join('')}
       <div class="nav-sep"></div>
       ${item('settings')}
+      <button class="nav-item nav-collapse" data-act="nav-collapse" title="${D.settings.navCollapsed ? 'Expand menu' : 'Collapse menu'} (Ctrl+\\)">${icon('sidebar')}<span>${D.settings.navCollapsed ? 'Expand menu' : 'Collapse menu'}</span></button>
     </nav>
     <div class="sidebar-foot" id="sidebar-foot"></div>`;
 }
@@ -940,6 +951,7 @@ function viewSettings() {
         <div class="set-row"><div class="t"><b>Seasonal decorations</b><span>A few leaves, snowflakes, petals or sun motes drifting gently past.</span></div>${sw('seasonFx')}</div></div>
 
       <div class="card"><h3>${icon('sliders', 'sm')} Menu</h3>
+        <div class="set-row" style="border-top:0;padding-top:0"><div class="t"><b>Compact menu</b><span>Shrink the sidebar to icons only (Ctrl+\\). Hover an icon to see its name.</span></div>${sw('navCollapsed')}</div>
         <div class="hint" style="margin-bottom:6px">Choose which pages show in the sidebar, and their order. Today and Settings always stay.</div>
         <div class="nav-cust">${order.map((id, i) => `<div class="nav-row ${hidden.includes(id) ? 'off' : ''}" data-k="nr-${id}">
           ${icon(NAV_ALL[id].ic, 'sm')}<span class="nm">${NAV_ALL[id].label}</span>
@@ -979,7 +991,8 @@ function viewSettings() {
         <div class="hint" style="margin-top:6px">Nudges only appear within your calendar day hours and while you're at the computer.</div></div>
 
       <div class="card"><h3>${icon('flame', 'sm')} App</h3>
-        <div class="set-row"><div class="t"><b>Start with Windows</b><span>Opens quietly in the tray when you sign in, so the break clock starts straight away.</span></div>${sw('launchAtStartup')}</div>
+        ${state.appInfo.portable ? `<div class="set-row"><div class="t"><b>Portable mode</b><span>Running from ${esc(state.appInfo.portableDir || 'a USB drive')}. Your data travels with Hearth in the "Hearth Data" folder beside it, and nothing is left on this PC.</span></div><span class="chip sage">${icon('check')}Portable</span></div>` :
+        `<div class="set-row"><div class="t"><b>Start with Windows</b><span>Opens quietly in the tray when you sign in, so the break clock starts straight away.</span></div>${sw('launchAtStartup')}</div>`}
         <div class="set-row"><div class="t"><b>Keep running in the tray when closed</b><span>Closing the window keeps reminders going. Quit from the tray icon.</span></div>${sw('closeToTray')}</div>
         <div class="set-row"><div class="t"><b>Quick-capture shortcut</b><span>Add a task or sticky from anywhere. Uses Electron accelerator format.</span></div><input class="input" value="${esc(s.hotkey)}" data-set="hotkey" style="width:230px;font-family:var(--font-mono);font-size:12.5px"></div></div>
       <div class="card"><h3>${icon('download', 'sm')} Your data</h3>
@@ -1096,7 +1109,7 @@ function modalProject(pid) {
         return `<div class="field"><label>Notebook</label><div class="row">${nb ? `<span class="chip" style="color:${nb.color}"><span class="dot"></span><span style="color:var(--text-2)">${esc(nb.name)} · ${plural(n, 'page')}</span></span><button class="btn sm" data-act="open-note" data-nb="${nb.id}">${icon('book', 'sm')}Open notebook</button>` :
         `<span class="muted" style="font-size:13px">No notebook yet.</span><button class="btn sm" data-act="p-notebook">${icon('book', 'sm')}Start a notebook</button>`}</div></div>`; })()}
       <div class="field"><label>Next action</label>
-        <div class="row"><input class="input" id="p-next" value="${esc(p.nextAction || '')}" data-pbind="nextAction" placeholder="What's the very next step?">
+        <div class="row"><input class="input" id="p-next" value="${esc(p.nextAction || '')}" data-pbind="nextAction" data-enter="p-next-today" placeholder="What's the very next step? (Enter adds it to today)">
         <button class="btn" data-act="p-next-today" title="Add the next action to today">${icon('sun', 'sm')}To today</button></div></div>
       <div class="field"><label>Tasks · ${open.length} open</label>
         <div class="add-bar" style="margin:0 0 8px;box-shadow:none">${icon('plus', 'sm')}<input id="p-add" placeholder="Add a task to this project…" data-enter="p-add"></div>
@@ -1461,10 +1474,16 @@ const ACTIONS = {
   'p-color': (el) => { const p = P.get(state.modal.arg); p.color = el.dataset.v; save(); const ico = $('.drawer-head .snip-ico'); if (ico) ico.style.background = p.color; refresh(); },
   'p-next-today': () => {
     const p = P.get(state.modal.arg);
-    if (!p.nextAction.trim()) { $('#p-next')?.focus(); return; }
-    addTask(p.nextAction, { projectId: p.id });
-    toast('Next action added to today', { ic: 'sun' });
+    const input = $('#p-next');
+    const v = (input ? input.value : p.nextAction || '').trim();
+    if (!v) { input?.focus(); return; }
+    p.nextAction = '';            // clear it so the next step can be typed straight away
+    p.updatedAt = Date.now();
+    addTask(v, { projectId: p.id });
+    const i2 = $('#p-next'); if (i2) { i2.value = ''; i2.focus(); }
+    toast(`"${v.length > 40 ? v.slice(0, 38) + '…' : v}" added to today`, { ic: 'sun' });
   },
+  'nav-collapse': () => toggleNav(),
   'p-add': () => {
     const i = $('#p-add'); const v = i.value.trim(); if (!v) return;
     addTask(v, { projectId: state.modal.arg, date: null });
@@ -1535,6 +1554,7 @@ const ACTIONS = {
   'set-toggle': (el) => {
     const k = el.dataset.v; D.settings[k] = !D.settings[k]; el.classList.toggle('on', D.settings[k]); save();
     if (k === 'seasonFx') applyTheme();
+    if (k === 'navCollapsed') { D.settings.navCollapsed = !D.settings.navCollapsed; toggleNav(); return; }
     if (k === 'sounds') { Sound.applyVolumes(); buildSidebar(); updateSidebar(); }
     if (k === 'smartAdd' || k === 'waterOn') refresh();
   },
@@ -1613,6 +1633,7 @@ document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey && e.key.toLowerCase() === 'n') || (!typing && e.key.toLowerCase() === 'n' && !e.ctrlKey && !e.altKey && !e.metaKey)) {
     e.preventDefault(); if (state.modal) closeModal(); go('today'); setTimeout(() => $('#add-task')?.focus(), 60); return;
   }
+  if (e.ctrlKey && !e.shiftKey && (e.key === '\\' || e.code === 'Backslash')) { e.preventDefault(); toggleNav(); return; }
   if (e.ctrlKey && /^[1-9]$/.test(e.key)) {
     const ids = visibleNav();
     if (!ids[+e.key - 1]) return;
@@ -1796,6 +1817,7 @@ window.H = {
 async function boot() {
   if (IS_CAPTURE) { bootCapture(); return; }
   D = normalise(await api.getData());
+  try { state.appInfo = (api.appInfo && await api.appInfo()) || {}; } catch (e) { state.appInfo = {}; }
   applyTheme();
   ensureRecurring();
   buildSidebar();
