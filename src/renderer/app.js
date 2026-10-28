@@ -845,6 +845,9 @@ function projectCard(p) {
   </div>`;
 }
 
+// project notes boxes grow with their text
+function growBox(t) { t.style.height = 'auto'; t.style.height = Math.min(520, t.scrollHeight + 2) + 'px'; }
+function growNotes() { document.querySelectorAll('.pb-notes-box').forEach(growBox); }
 function projectCardBig(p) {
   const tasks = T.ofProject(p.id);
   const open = tasks.filter(t => !t.done).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999') || byOrder(a, b));
@@ -869,6 +872,8 @@ function projectCardBig(p) {
     <div class="add-bar pb-add">${icon('plus', 'sm')}<input id="pa-${p.id}" data-pid="${p.id}" data-enter="p-add-inline" placeholder="Add a task to ${esc(p.name)}… (dates work too: 'fri', 'tomorrow 2pm')" maxlength="300"></div>
     ${done.length ? `<button class="link pb-done-toggle" data-act="p-done-toggle" data-pid="${p.id}">${icon(showDone ? 'chevronUp' : 'chevron', 'sm')}${showDone ? 'Hide' : 'Show'} ${plural(done.length, 'finished task')}</button>
       ${showDone ? `<div class="list pb-done">${done.map(t => taskRow(t, { ctx: 'proj' })).join('')}</div>` : ''}` : ''}
+    <div class="pb-notes"><label class="label-sm" for="pnt-${p.id}">${icon('note', 'sm')} Notes</label>
+      <textarea class="textarea pb-notes-box" id="pnt-${p.id}" data-pid="${p.id}" data-pnotes="1" rows="3" placeholder="Links, decisions, contacts, commands, anything useful… (saves as you type)">${esc(p.notes || '')}</textarea></div>
   </div>`;
 }
 
@@ -1209,6 +1214,7 @@ function renderView(transition) {
     flipRender(view, VIEWS[state.view]());
   }
   if (mod) mod.mount();
+  if (state.view === 'projects') growNotes();
   if (state.view === 'settings') api.dataPath().then(p => { const el = $('[data-live="datapath"]'); if (el) el.textContent = p; });
   updateLive();
 }
@@ -1900,6 +1906,7 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('input', (e) => {
   const t = e.target;
   if (t.dataset.pnext) { const p = P.get(t.dataset.pid); if (p) { p.nextAction = t.value; save(); } return; }
+  if (t.dataset.pnotes) { const p = P.get(t.dataset.pid); if (p) { p.notes = t.value; p.updatedAt = Date.now(); clearTimeout(t._sv); t._sv = setTimeout(save, 400); } growBox(t); return; }
   if (t.dataset.rbind) {
     const r = D.recurring.find(x => x.id === (t.closest('[data-id]') || {}).dataset?.id); if (!r) return;
     let v = t.value; const k = t.dataset.rbind;

@@ -11,11 +11,11 @@ Grab the latest files from the **Releases** page on GitHub. Every push to `main`
 
 ### Building it yourself
 
-**Make the installer once:** double-click **`Make-Installer.bat`**. You don't need to install anything first. If Node.js isn't on the PC, the script downloads a private copy into a `.tools` folder, used only for building. After a few minutes it opens `dist\` with **`Hearth-Setup-1.5.0.exe`**.
+**Make the installer once:** double-click **`Make-Installer.bat`**. You don't need to install anything first. If Node.js isn't on the PC, the script downloads a private copy into a `.tools` folder, used only for building. After a few minutes it opens `dist\` with **`Hearth-Setup-1.5.1.exe`**.
 
-**Install:** double-click `Hearth-Setup-1.5.0.exe`. A setup wizard lets you choose just-me or all users and the install folder. It creates Start menu and desktop shortcuts, launches Hearth when it finishes, and adds an uninstaller in Windows *Apps*.
+**Install:** double-click `Hearth-Setup-1.5.1.exe`. A setup wizard lets you choose just-me or all users and the install folder. It creates Start menu and desktop shortcuts, launches Hearth when it finishes, and adds an uninstaller in Windows *Apps*.
 
-- **Silent install** (e.g. NinjaOne): `Hearth-Setup-1.5.0.exe /S`. Add `/allusers` for a machine-wide install.
+- **Silent install** (e.g. NinjaOne): `Hearth-Setup-1.5.1.exe /S`. Add `/allusers` for a machine-wide install.
 - The installer isn't code-signed, so Windows SmartScreen may say "Windows protected your PC" the first time. Click **More info → Run anyway**. Silent installs aren't affected.
 - Optional: if this folder is pushed to GitHub, `.github/workflows/build-installer.yml` builds the installer automatically on every push.
 - `run-dev.bat` runs Hearth straight from the source folder, for trying changes.
@@ -55,7 +55,7 @@ Your data is kept when you install a newer version over the top.
 - The **expand** button in the toolbar hides the main menu and the shelf for a full-width page. Click it again to bring them back.
 - **Checklists** tick like real boxes. Type `[] ` at the start of a line or use the checklist button.
 
-**Projects**: click the expand arrow on a project to see every task with its tick box, add tasks and set the next action right there. Hearth remembers which projects you left expanded. *Expand all / Simplify all* switches them all at once.
+**Projects**: click the expand arrow on a project to see every task with its tick box, add tasks, set the next action and keep **notes** right there (they save as you type and are the same notes as in *Details*). Hearth remembers which projects you left expanded. *Expand all / Simplify all* switches them all at once.
 
 **Recurring routines**: click a routine to open it and add notes, a priority, steps (these become subtasks), the time, the days and the project. Each task it creates carries these with it. *Add one to today now* creates one straight away.
 
