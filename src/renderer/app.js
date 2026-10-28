@@ -31,7 +31,7 @@ function defaultData() {
       wrapTime: '17:00', focusMinutes: 25, launchAtStartup: true, closeToTray: true,
       staleProjectDays: 7, hotkey: 'CommandOrControl+Alt+Space', theme: 'light',
       nav: { hidden: [], order: [] },
-      season: 'auto', seasonFx: false, noteFont: 'auto', hiddenWidgets: [], spellcheck: true, spellLang: 'en-GB', fxDefaultV2: true, customSounds: [], soundSources: {},
+      season: 'auto', seasonFx: false, noteFont: 'auto', hiddenWidgets: [], widgetOrder: [], widgetsElsewhere: false, widgetPages: {}, weather: null, spellcheck: true, spellLang: 'en-GB', fxDefaultV2: true, customSounds: [], soundSources: {},
       sounds: true, volume: 0.6,
       ambient: 'rain', ambientAuto: true, ambientVolume: 0.5, focusShield: true, dnd: true,
       waterOn: true, waterEvery: 90, waterGoal: 8, postureOn: true, postureEvery: 45,
@@ -98,6 +98,11 @@ function makeShim() {
     closeCapture: async () => {},
     hotkeyOk: async () => true,
     dataPath: async () => 'Browser storage (preview mode)',
+    // preview-only sample weather so the widget can be seen outside the desktop app
+    weatherFind: async (q) => [{ name: q.replace(/^./, c => c.toUpperCase()), region: 'England', country: 'United Kingdom', lat: 51.06, lon: -0.33 }, { name: q.replace(/^./, c => c.toUpperCase()), region: 'Victoria', country: 'Australia', lat: -36.7, lon: 142.2 }],
+    weatherGet: async () => { const t0 = new Date(); t0.setMinutes(0, 0, 0); const time = [], temperature_2m = [], weather_code = [], precipitation_probability = [];
+      for (let i = -3; i < 30; i++) { const d = new Date(t0.getTime() + i * 3600000); time.push(d.toISOString().slice(0, 16)); temperature_2m.push(11 + 3 * Math.sin(i / 4)); weather_code.push([2, 3, 61, 80, 1][Math.abs(i) % 5]); precipitation_probability.push([10, 20, 60, 70, 5][Math.abs(i) % 5]); }
+      return { current: { temperature_2m: 12.4, apparent_temperature: 10.1, weather_code: 2, is_day: 1, wind_speed_10m: 11 }, hourly: { time, temperature_2m, weather_code, precipitation_probability }, daily: { temperature_2m_max: [14.2], temperature_2m_min: [7.8], precipitation_probability_max: [65] } }; },
     exportData: async () => {
       const blob = new Blob([JSON.stringify(load(), null, 2)], { type: 'application/json' });
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
@@ -159,7 +164,7 @@ const state = {
   view: 'today', entering: true, day: today(),
   addWhen: 'today', addProject: '', showDone: false, showTomorrow: true, showUpcoming: false,
   projectFilter: 'active', snipQuery: '', snipForm: null, recForm: { freq: 'weekdays', days: [1], dom: 1 },
-  weekOffset: 0, modal: null, breakOpen: false, pendingBreak: false, appInfo: {}, recOpen: new Set(), projDone: new Set(),
+  weekOffset: 0, modal: null, breakOpen: false, pendingBreak: false, appInfo: {}, wx: {}, wxResults: null, wxEdit: false, recOpen: new Set(), projDone: new Set(),
   filter: { tag: null, prio: 0 }, lastWater: Date.now(), lastPosture: Date.now(),
   brk: { status: { activeSeconds: 0, intervalSeconds: 3600, snoozedUntil: 0, due: false, away: false }, at: Date.now() }
 };
@@ -584,43 +589,240 @@ function viewToday() {
       </div>
 
       <aside class="side-col">
-        ${widgetOn('desk') ? window.Notes.deskCard() : ''}
-        ${widgetOn('score') ? scoreCard(sc, stk) : ''}
-        ${widgetOn('break') ? breakCard() : ''}
-        ${widgetOn('focus') || D.meta.focus ? focusCard() : ''}
-        ${widgetOn('water') ? waterCard() : ''}
-        ${widgetOn('waiting') ? waitingMini() : ''}
-        ${widgetOn('projects') ? projectsMini() : ''}
-        ${(D.settings.hiddenWidgets || []).length ? `<button class="link widgets-hidden" data-act="widgets-manage">${icon('eye', 'sm')} ${plural(D.settings.hiddenWidgets.length, 'hidden widget')}</button>` : ''}
+        ${widgetsHtml()}
       </aside>
     </div>
   </div>`;
 }
 
-// Today's side widgets: right-click one to hide it; Settings brings them back
+// ================================================================== WIDGETS
+// Cards down the right of Today (and, if you like, other pages). Right-click one to hide or move it.
 const WIDGETS = {
   desk: { k: 'c-desk', name: 'On your desk', ic: 'sticky', sub: 'Sticky notes you pinned from a notebook' },
+  timeleft: { k: 'c-time', name: 'Time left today', ic: 'clock', sub: 'How much of your working day is left (set your hours below)' },
+  weather: { k: 'c-weather', name: 'Weather', ic: 'cloudSun', sub: "Today's forecast for your town" },
   score: { k: 'c-score', name: 'Good-day score', ic: 'sparkle', sub: 'Your score and streak' },
   break: { k: 'c-break', name: 'Screen break', ic: 'eye', sub: 'The break clock card (the small clock bottom left stays)' },
   focus: { k: 'c-focus', name: 'Focus mode', ic: 'target', sub: 'Timers and soundscapes. Still shows while a focus session runs' },
   water: { k: 'c-water', name: 'Water', ic: 'drop', sub: 'The glass tracker' },
+  deadlines: { k: 'c-dead', name: 'Deadlines', ic: 'flag', sub: 'Projects due in the next two weeks (shows when something is due)' },
+  ribbons: { k: 'c-rib', name: 'Ribbons', ic: 'ribbon', sub: 'Jump to notebook pages marked with a ribbon (shows once you add one)' },
+  snips: { k: 'c-snips', name: 'Pinned snippets', ic: 'pin', sub: 'One-click copy for snippets you pin (pin them on the Snippets page)' },
   waiting: { k: 'c-wait', name: 'Time to chase', ic: 'hand', sub: 'Waiting-on items that are due' },
   projects: { k: 'c-proj', name: 'Projects', ic: 'folder', sub: 'Your active projects' }
 };
+const DEFAULT_WIDGET_ORDER = ['desk', 'timeleft', 'weather', 'score', 'break', 'focus', 'water', 'deadlines', 'ribbons', 'snips', 'waiting', 'projects'];
+// pages that can show the widget column too (Settings → Today widgets)
+const WIDGET_PAGES = { projects: 'Projects', notes: 'Notebooks', calendar: 'Calendar', waiting: 'Waiting on', recurring: 'Recurring', snippets: 'Snippets & links', week: 'Weekly review' };
+function widgetOrder() {
+  const o = (D.settings.widgetOrder || []).filter((id, i, a) => WIDGETS[id] && a.indexOf(id) === i);
+  DEFAULT_WIDGET_ORDER.forEach((id, i) => {
+    if (o.includes(id)) return;
+    const prev = DEFAULT_WIDGET_ORDER.slice(0, i).reverse().find(x => o.includes(x));
+    o.splice(prev ? o.indexOf(prev) + 1 : 0, 0, id);
+  });
+  return o;
+}
 const widgetOn = (id) => !(D.settings.hiddenWidgets || []).includes(id);
+const widgetsHere = (v = state.view) => !!(D.settings.widgetsElsewhere && WIDGET_PAGES[v] && (D.settings.widgetPages || {})[v] !== false);
 function setWidget(id, on) {
   const h = new Set(D.settings.hiddenWidgets || []);
   on ? h.delete(id) : h.add(id);
   D.settings.hiddenWidgets = [...h];
   save(); refresh();
 }
+// dir -1 = up, 1 = down. From the card menu it hops over hidden widgets so the card visibly moves.
+function moveWidget(id, dir, overHidden) {
+  const o = widgetOrder(); const i = o.indexOf(id); if (i < 0) return;
+  let j = i + dir;
+  if (overHidden) while (j >= 0 && j < o.length && !widgetOn(o[j])) j += dir;
+  if (j < 0 || j >= o.length) return;
+  o.splice(i, 1); o.splice(j, 0, id);
+  D.settings.widgetOrder = o; save(); refresh();
+}
 function widgetMenu(id, x, y) {
   const w = WIDGETS[id]; if (!w) return;
+  const vis = widgetOrder().filter(widgetOn); const at = vis.indexOf(id);
   const items = [{ header: w.name },
+    { label: 'Move up', ic: 'chevronUp', disabled: at <= 0, fn: () => moveWidget(id, -1, true) },
+    { label: 'Move down', ic: 'chevron', disabled: at < 0 || at >= vis.length - 1, fn: () => moveWidget(id, 1, true) },
+    '-',
     { label: 'Hide this widget', ic: 'eyeOff', fn: () => { setWidget(id, false); toast(`${w.name} hidden. Bring it back in Settings.`, { ic: 'eye', action: { label: 'Undo', fn: () => setWidget(id, true) } }); } }];
   if (id === 'water' && D.settings.waterOn !== false) items.push({ label: 'Turn off water nudges too', ic: 'bellOff', fn: () => { D.settings.waterOn = false; setWidget(id, false); toast('Water tracking and nudges are off. Turn them back on in Settings.', { ic: 'drop' }); } });
+  if (id === 'timeleft') items.push({ label: 'Set my work hours…', ic: 'clock', fn: () => actions['work-setup']() });
+  if (id === 'weather' && D.settings.weather) items.push({ label: 'Change town…', ic: 'search', fn: () => actions['wx-change']() });
   items.push('-', { label: 'Choose widgets…', ic: 'sliders', fn: () => actions['widgets-manage']() });
   window.Notes.ctxMenu(items, x, y);
+}
+function widgetHtml(id) {
+  switch (id) {
+    case 'desk': return window.Notes.deskCard();
+    case 'score': return scoreCard(dayScore(today()), streak());
+    case 'break': return breakCard();
+    case 'focus': return focusCard();
+    case 'water': return waterCard();
+    case 'waiting': return waitingMini();
+    case 'projects': return projectsMini();
+    case 'timeleft': return timeLeftCard();
+    case 'weather': return weatherCard();
+    case 'deadlines': return deadlinesCard();
+    case 'ribbons': return ribbonsCard();
+    case 'snips': return snipsCard();
+  }
+  return '';
+}
+function widgetsHtml() {
+  const hid = D.settings.hiddenWidgets || [];
+  const cards = widgetOrder().filter(id => widgetOn(id) || (id === 'focus' && D.meta.focus)).map(widgetHtml).join('');
+  return cards + (hid.length ? `<button class="link widgets-hidden" data-act="widgets-manage">${icon('eye', 'sm')} ${plural(hid.length, 'hidden widget')}</button>` : '');
+}
+// redraw one widget in place (used by weather and other async updates)
+function redrawWidget(id) { $$(`[data-k="${WIDGETS[id].k}"]`).forEach(el => { const t = document.createElement('div'); t.innerHTML = widgetHtml(id); const n = t.firstElementChild; n ? el.replaceWith(n) : el.remove(); }); }
+
+// ---------- deadlines
+function deadlinesCard() {
+  const t = today(), lim = addDays(t, 14);
+  const list = D.projects.filter(p => p.status === 'active' && p.due && p.due <= lim).sort((a, b) => a.due.localeCompare(b.due));
+  if (!list.length) return '';
+  return `<div class="card dl-card" data-k="c-dead"><h3>${icon('flag', 'sm')} Deadlines <span class="right muted">next 2 weeks</span></h3>
+    <div class="dl-list">${list.map(p => {
+      const n = diffDays(t, p.due);
+      const [lbl, cls] = n < 0 ? [`${-n}d overdue`, 'over'] : n === 0 ? ['Today', 'now'] : n === 1 ? ['Tomorrow', 'soon'] : [`${n} days`, n <= 3 ? 'soon' : ''];
+      const open = T.ofProject(p.id).filter(x => !x.done).length;
+      return `<button class="dl-row" data-act="project-open" data-pid="${p.id}" title="Due ${fmtLong(p.due)}"><span class="dot" style="background:${p.color}"></span>
+        <span class="nm">${esc(p.name)}<small>${fmtShort(p.due)} · ${plural(open, 'open task')}</small></span><span class="dl-when ${cls}">${lbl}</span></button>`;
+    }).join('')}</div></div>`;
+}
+// ---------- ribbons
+function ribbonsCard() {
+  const pages = D.pages.filter(pg => pg.bookmarked && D.notebooks.some(n => n.id === pg.notebookId))
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 8);
+  if (!pages.length) return '';
+  return `<div class="card rib-card" data-k="c-rib"><h3>${icon('ribbon', 'sm')} Ribbons</h3>
+    <div class="rib-list">${pages.map(pg => { const nb = D.notebooks.find(n => n.id === pg.notebookId);
+      return `<button class="rib-row" data-act="open-note" data-nb="${nb.id}" data-pg="${pg.id}" title="Open this page"><span class="rib-mark" style="--c:${nb.color}"></span>
+        <span class="nm">${esc(pg.title || (pg.date ? fmtShort(pg.date) : 'Untitled page'))}<small>${esc(nb.name)}</small></span>${icon('chevronR', 'sm')}</button>`; }).join('')}</div></div>`;
+}
+// ---------- pinned snippets
+function snipsCard() {
+  const list = D.snippets.filter(x => x.pinned).sort((a, b) => (a.pinnedAt || 0) - (b.pinnedAt || 0)).slice(0, 8);
+  if (!list.length) return '';
+  return `<div class="card sn-card" data-k="c-snips"><h3>${icon('pin', 'sm')} Pinned snippets <span class="right"><button class="link" data-view="snippets">All</button></span></h3>
+    <div class="sn-list">${list.map(x => `<div class="sn-row" data-id="${x.id}" title="${esc(x.kind === 'link' ? x.content : x.content.slice(0, 300))}">
+      <span class="snip-ico ${x.kind === 'link' ? 'link' : 'code'}">${icon(x.kind === 'link' ? 'link' : 'code', 'sm')}</span><span class="nm">${esc(x.title)}</span>
+      ${x.kind === 'link' ? `<button class="btn sm" data-act="snip-open">${icon('external', 'sm')}Open</button>` : `<button class="btn sm" data-act="snip-copy">${icon('copy', 'sm')}Copy</button>`}</div>`).join('')}</div></div>`;
+}
+
+// ---------- work hours + time left today
+function work() {
+  let w = D.settings.work;
+  if (!w || !Array.isArray(w.weeks) || !w.weeks[0]) w = D.settings.work = { rotate: false, anchor: null, weeks: [{ start: '09:00', end: '17:30', days: [1, 2, 3, 4, 5] }] };
+  if (!w.weeks[1]) w.weeks[1] = { start: w.weeks[0].start, end: w.weeks[0].end, days: [...w.weeks[0].days] };
+  return w;
+}
+function mondayOf(d) { const x = new Date(d); x.setHours(12, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }
+function weekIndexFor(d) {
+  const w = work(); if (!w.rotate) return 0;
+  const a = w.anchor ? parseKey(w.anchor) : mondayOf(new Date());
+  const n = Math.round((mondayOf(d) - mondayOf(a)) / (7 * 86400000));
+  return ((n % 2) + 2) % 2;
+}
+function shiftFor(d) {
+  const w = work(), wi = weekIndexFor(d), wk = w.weeks[wi];
+  if (!wk || !wk.days.includes(d.getDay())) return null;
+  const at = (hm) => { const [h, m] = String(hm || '').split(':').map(Number); const x = new Date(d); x.setHours(h || 0, m || 0, 0, 0); return x; };
+  const s = at(wk.start), e = at(wk.end);
+  return e > s ? { start: s, end: e, week: wi } : null;
+}
+function nextShift(from) { for (let i = 1; i <= 21; i++) { const d = new Date(from); d.setDate(d.getDate() + i); const sh = shiftFor(d); if (sh) return sh; } return null; }
+const clock12 = (d) => { const h = d.getHours(), m = d.getMinutes(); return `${h % 12 || 12}${m ? ':' + pad(m) : ''}${h < 12 ? 'am' : 'pm'}`; };
+const hm = (s) => { const [h, m] = s.split(':').map(Number); const d = new Date(); d.setHours(h, m); return clock12(d); };
+const durText = (ms) => { const m = Math.max(0, Math.round(ms / 60000)); const h = Math.floor(m / 60); return h ? `${h}h ${pad(m % 60)}m` : `${m}m`; };
+function timeLeftInner() {
+  const now = new Date(), w = work(), sh = shiftFor(now);
+  const wk = (i) => w.rotate ? ` · Week ${i + 1}` : '';
+  if (sh && now < sh.start) return `<div class="tl-big">Starts at ${clock12(sh.start)}</div><div class="tl-bar"><i style="width:0%"></i></div><div class="tl-sub">in ${durText(sh.start - now)}${wk(sh.week)} · until ${clock12(sh.end)}</div>`;
+  if (sh && now < sh.end) {
+    const pct = (now - sh.start) / (sh.end - sh.start) * 100, left = sh.end - now;
+    return `<div class="tl-big ${left < 30 * 60000 ? 'ending' : ''}">${durText(left)} <small>left</small></div>
+      <div class="tl-bar ${left < 30 * 60000 ? 'ending' : ''}"><i style="width:${pct.toFixed(1)}%"></i></div>
+      <div class="tl-sub">${clock12(sh.start)} – ${clock12(sh.end)}${wk(sh.week)} · ${Math.floor(pct)}% done</div>`;
+  }
+  const n = nextShift(now);
+  const when = n ? (dayKey(n.start) === tomorrow() ? 'Tomorrow' : n.start.toLocaleDateString('en-GB', { weekday: 'long' })) : '';
+  return `<div class="tl-big">${sh ? 'Done for today' : 'Day off'}</div><div class="tl-bar done"><i style="width:${sh ? 100 : 0}%"></i></div>
+    <div class="tl-sub">${n ? `Next: ${when} ${clock12(n.start)} – ${clock12(n.end)}${wk(n.week)}` : 'No working days set yet'}</div>`;
+}
+function timeLeftCard() {
+  return `<div class="card tl-card" data-k="c-time"><h3>${icon('clock', 'sm')} Time left today <span class="right"><button class="link" data-act="work-setup">Hours</button></span></h3>
+    <div data-live="timeleft">${timeLeftInner()}</div></div>`;
+}
+function workSettingsCard() {
+  const w = work();
+  const chips = (wi) => [1, 2, 3, 4, 5, 6, 0].map(d => `<button class="day-chip ${w.weeks[wi].days.includes(d) ? 'on' : ''}" data-act="work-day" data-w="${wi}" data-v="${d}" title="${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][d]}">${'SMTWTFS'[d]}</button>`).join('');
+  const row = (wi, label) => `<div class="set-row work-row"><div class="t"><b>${label}</b></div>
+    <input class="input time-input" type="time" value="${w.weeks[wi].start}" data-work="${wi}.start" aria-label="${label} start"><span class="muted">to</span>
+    <input class="input time-input" type="time" value="${w.weeks[wi].end}" data-work="${wi}.end" aria-label="${label} finish"><div class="day-chips">${chips(wi)}</div></div>`;
+  const cur = weekIndexFor(new Date()), nxt = w.rotate ? 1 - cur : 0;
+  return `<div class="card" id="set-work"><h3>${icon('clock', 'sm')} Work hours</h3>
+    <div class="hint" style="margin-bottom:4px">Used by the <b>Time left today</b> widget. On a rotating shift? Choose <i>Two-week rotation</i> and set each week.</div>
+    <div class="set-row" style="border-top:0"><div class="t"><b>Pattern</b></div><div class="seg">
+      <button data-act="work-rotate" data-v="0" class="${w.rotate ? '' : 'on'}">Same every week</button><button data-act="work-rotate" data-v="1" class="${w.rotate ? 'on' : ''}">Two-week rotation</button></div></div>
+    ${row(0, w.rotate ? 'Week 1' : 'Hours')}
+    ${w.rotate ? row(1, 'Week 2') + `<div class="set-row"><div class="t"><b>This week is</b><span>Next week is Week ${nxt + 1}: ${hm(w.weeks[nxt].start)} – ${hm(w.weeks[nxt].end)}. It swaps every Monday.</span></div>
+      <div class="seg"><button data-act="work-this" data-v="0" class="${cur === 0 ? 'on' : ''}">Week 1</button><button data-act="work-this" data-v="1" class="${cur === 1 ? 'on' : ''}">Week 2</button></div></div>` : ''}
+  </div>`;
+}
+
+// ---------- weather (Open-Meteo: free, no account; fetched by the main process)
+const WX = { 0: ['Clear', 'sun'], 1: ['Mainly clear', 'sun'], 2: ['Partly cloudy', 'cloudSun'], 3: ['Overcast', 'cloud'], 45: ['Fog', 'fog'], 48: ['Freezing fog', 'fog'],
+  51: ['Light drizzle', 'rain'], 53: ['Drizzle', 'rain'], 55: ['Heavy drizzle', 'rain'], 56: ['Freezing drizzle', 'rain'], 57: ['Freezing drizzle', 'rain'],
+  61: ['Light rain', 'rain'], 63: ['Rain', 'rain'], 65: ['Heavy rain', 'rain'], 66: ['Freezing rain', 'rain'], 67: ['Freezing rain', 'rain'],
+  71: ['Light snow', 'snow'], 73: ['Snow', 'snow'], 75: ['Heavy snow', 'snow'], 77: ['Snow grains', 'snow'], 80: ['Showers', 'rain'], 81: ['Showers', 'rain'], 82: ['Heavy showers', 'rain'],
+  85: ['Snow showers', 'snow'], 86: ['Snow showers', 'snow'], 95: ['Thunderstorm', 'storm'], 96: ['Thunderstorm', 'storm'], 99: ['Thunderstorm', 'storm'] };
+const wxInfo = (code, day = 1) => { const [l, ic] = WX[code] || ['—', 'cloud']; return [l, !day && (ic === 'sun') ? 'moon' : !day && ic === 'cloudSun' ? 'cloud' : ic]; };
+function loadWeather(force) {
+  const loc = D.settings.weather; if (!loc || loc.lat == null || !api.weatherGet) return;
+  const key = `${loc.lat},${loc.lon}`, wx = state.wx;
+  if (wx.loading) return;
+  if (!force && wx.key === key && (wx.data || wx.err) && Date.now() - wx.at < (wx.err ? 5 : 30) * 60000) return;
+  state.wx = { ...wx, loading: true, key };
+  api.weatherGet({ lat: loc.lat, lon: loc.lon }).then(r => {
+    state.wx = r && !r.error ? { data: r, at: Date.now(), key } : { data: wx.key === key ? wx.data : null, err: (r && r.error) || 'No answer', at: Date.now(), key };
+  }).catch(e => { state.wx = { err: String(e), at: Date.now(), key }; }).finally(() => { state.wx.loading = false; redrawWidget('weather'); });
+}
+function wxSearchHtml(cancel) {
+  const r = state.wxResults;
+  return `<div class="wx-set"><p class="muted">${cancel ? 'Choose a different town.' : "Add your town to see today's forecast."}</p>
+    <div class="row"><input class="input" id="wx-q" placeholder="Town or city" data-enter="wx-find" autocomplete="off" spellcheck="false"><button class="btn sm" data-act="wx-find">${icon('search', 'sm')}Find</button></div>
+    ${r && r.error ? `<div class="wx-err">Couldn't search right now. Check your internet connection.</div>` : ''}
+    ${r && Array.isArray(r) ? (r.length ? `<div class="wx-results">${r.map((x, i) => `<button class="wx-res" data-act="wx-pick" data-i="${i}">${icon('pin', 'sm')}<span>${esc(x.name)}<small>${esc([x.region, x.country].filter(Boolean).join(', '))}</small></span></button>`).join('')}</div>` : '<div class="wx-err">No places found. Try another spelling.</div>') : ''}
+    ${cancel ? `<button class="link" data-act="wx-cancel">Cancel</button>` : ''}</div>`;
+}
+function weatherCard() {
+  const loc = D.settings.weather;
+  const head = (right) => `<h3>${icon('cloudSun', 'sm')} Weather ${right || ''}</h3>`;
+  if (!loc || loc.lat == null || state.wxEdit) return `<div class="card wx-card" data-k="c-weather">${head()}${wxSearchHtml(!!(loc && loc.lat != null))}</div>`;
+  const wx = state.wx;
+  if (!wx.loading && (wx.key !== `${loc.lat},${loc.lon}` || Date.now() - (wx.at || 0) > (wx.err ? 5 : 30) * 60000)) setTimeout(() => loadWeather(), 0);
+  const right = `<span class="right"><button class="link" data-act="wx-change" title="Change town">${esc(loc.name)}</button></span>`;
+  const d = wx.data;
+  if (!d) return `<div class="card wx-card" data-k="c-weather">${head(right)}<div class="wx-wait">${wx.err ? `Couldn't get the forecast. <button class="link" data-act="wx-retry">Try again</button>` : `${icon('cloud', 'sm')} Fetching the forecast…`}</div></div>`;
+  const c = d.current || {}, dl = d.daily || {}, hr = d.hourly || {};
+  const [label, ic] = wxInfo(c.weather_code, c.is_day);
+  const nowH = new Date(); nowH.setMinutes(0, 0, 0);
+  const times = (hr.time || []).map(t => new Date(t));
+  let i0 = times.findIndex(t => t > nowH); if (i0 < 0) i0 = 0;
+  const slots = [0, 2, 4, 6, 8].map(k => i0 + k).filter(i => i < times.length);
+  const rainAt = (() => { for (let i = i0 - 1; i < Math.min(times.length, i0 + 12); i++) if (i >= 0 && (hr.precipitation_probability || [])[i] >= 55) return i; return -1; })();
+  const r = (v) => Math.round(v);
+  return `<div class="card wx-card" data-k="c-weather">${head(right)}
+    <div class="wx-now"><span class="wx-ic">${icon(ic)}</span><div class="wx-main"><div class="wx-temp">${r(c.temperature_2m)}°</div><div class="wx-desc">${label}</div></div>
+      <div class="wx-hl"><span>H ${r(dl.temperature_2m_max[0])}° · L ${r(dl.temperature_2m_min[0])}°</span><span>${icon('drop', 'sm')} ${dl.precipitation_probability_max[0] ?? 0}% rain</span><span title="Wind ${r(c.wind_speed_10m)} mph">Feels ${r(c.apparent_temperature)}°</span></div></div>
+    <div class="wx-hours">${slots.map(i => { const [, hic] = wxInfo(hr.weather_code[i], (times[i].getHours() > 6 && times[i].getHours() < 19) ? 1 : 0);
+      return `<div><small>${clock12(times[i])}</small>${icon(hic, 'sm')}<b>${r(hr.temperature_2m[i])}°</b><em>${hr.precipitation_probability[i] ?? 0}%</em></div>`; }).join('')}</div>
+    ${rainAt >= 0 ? `<div class="wx-note">${icon('rain', 'sm')} Rain likely ${times[rainAt] <= new Date() ? 'now' : 'from ' + clock12(times[rainAt])}. Maybe take a coat.</div>` : ''}
+  </div>`;
 }
 
 function breakCard() {
@@ -1032,6 +1234,7 @@ function viewSnippets() {
           <div style="min-width:0;flex:1"><b>${esc(s.title)}</b><small>${s.kind === 'link' ? esc(host) : esc(plural(s.content.split('\n').length, 'line'))}</small></div></div>
         ${s.kind === 'snippet' ? `<pre>${esc(s.content)}</pre>` : ''}
         <div class="foot"><div class="tags">${(s.tags || []).map(t => `<span class="chip">${esc(t)}</span>`).join('')}</div>
+          <button class="icon-btn ${s.pinned ? 'lit' : ''}" data-act="snip-pin" title="${s.pinned ? 'Unpin from the widget' : 'Pin to the Pinned snippets widget'}">${icon('pin', 'sm')}</button>
           <button class="icon-btn" data-act="snip-edit" title="Edit">${icon('edit', 'sm')}</button>
           <button class="icon-btn danger" data-act="snip-delete" title="Delete">${icon('trash', 'sm')}</button>
           ${s.kind === 'link' ? `<button class="btn sm primary" data-act="snip-open">${icon('external', 'sm')}Open</button>` : `<button class="btn sm" data-act="snip-copy">${icon('copy', 'sm')}Copy</button>`}</div></div>`;
@@ -1161,9 +1364,15 @@ function viewSettings() {
 
       <div class="card" id="set-widgets"><h3>${icon('sun', 'sm')} Today widgets</h3>
         <div class="hint" style="margin-bottom:6px">Choose which cards show down the side of Today. You can also right-click a card there to hide it.</div>
-        <div class="nav-cust">${Object.entries(WIDGETS).map(([id, w]) => `<div class="nav-row ${widgetOn(id) ? '' : 'off'}" data-k="wr-${id}">
+        <div class="nav-cust">${widgetOrder().map((id, i, o) => { const w = WIDGETS[id]; return `<div class="nav-row ${widgetOn(id) ? '' : 'off'}" data-k="wr-${id}">
           ${icon(w.ic, 'sm')}<span class="nm">${w.name}<small>${w.sub}</small></span>
-          <button class="switch ${widgetOn(id) ? 'on' : ''}" data-act="widget-toggle" data-v="${id}" title="${widgetOn(id) ? 'Hide' : 'Show'}"></button></div>`).join('')}</div></div>
+          <button class="icon-btn mini" data-act="widget-move" data-v="${id}" data-dir="-1" title="Move up" ${i === 0 ? 'disabled' : ''}>${icon('chevronUp', 'sm')}</button>
+          <button class="icon-btn mini" data-act="widget-move" data-v="${id}" data-dir="1" title="Move down" ${i === o.length - 1 ? 'disabled' : ''}>${icon('chevron', 'sm')}</button>
+          <button class="switch ${widgetOn(id) ? 'on' : ''}" data-act="widget-toggle" data-v="${id}" title="${widgetOn(id) ? 'Hide' : 'Show'}"></button></div>`; }).join('')}</div>
+        <div class="set-row" style="margin-top:8px"><div class="t"><b>Show widgets on other pages</b><span>Adds the same widget column down the right of the pages you pick.</span></div>${sw('widgetsElsewhere')}</div>
+        ${s.widgetsElsewhere ? `<div class="set-row sub-row"><div class="t"><b>On</b></div><div class="page-chips">${Object.entries(WIDGET_PAGES).map(([v, l]) => `<button class="chip-toggle ${(s.widgetPages || {})[v] !== false ? 'on' : ''}" data-act="widget-page" data-v="${v}">${(s.widgetPages || {})[v] !== false ? icon('check', 'sm') : ''}${l}</button>`).join('')}</div></div>` : ''}</div>
+
+      ${workSettingsCard()}
 
       <div class="card"><h3>${icon('plus', 'sm')} Tasks & calendar</h3>
         <div class="set-row"><div class="t"><b>Smart quick-add</b><span>Understands dates and times ("fri 2pm", "tomorrow", "25/11"), #labels, !1–!3 priority and @project.</span></div>${sw('smartAdd')}</div>
@@ -1218,18 +1427,22 @@ function renderView(transition) {
   view.classList.toggle('notes-mode', isNotes);
   document.body.classList.toggle('in-notes', isNotes);
   const mod = MODS()[state.view];
-  if (mod && !transition) { mod.light(); updateLive(); return; }
+  const wHere = widgetsHere();
+  view.classList.toggle('with-widgets', wHere);
+  const html = () => { const inner = VIEWS[state.view](); return wHere ? `<div class="wv-grid ${isNotes ? 'full' : ''}"><div class="wv-main">${inner}</div><aside class="side-col wv-side" id="wv-side">${widgetsHtml()}</aside></div>` : inner; };
+  if (mod && !transition && !!$('#wv-side') === wHere) { mod.light(); const side = $('#wv-side'); if (side) flipRender(side, widgetsHtml()); updateLive(); return; }
+  if (mod && !transition) transition = true;
   if (transition) {
     state.entering = true;
     view.classList.remove('enter');
-    view.innerHTML = VIEWS[state.view]();
+    view.innerHTML = html();
     void view.offsetWidth;
     view.classList.add('enter');
     $('.main').scrollTop = 0;
     state.entering = false;
   } else {
     state.entering = false;
-    flipRender(view, VIEWS[state.view]());
+    flipRender(view, html());
   }
   if (mod) mod.mount();
   if (state.view === 'projects') growNotes();
@@ -1455,6 +1668,8 @@ function focusElapsed(f = D.meta.focus) {
 }
 
 function updateLive() {
+  const tls = $$('[data-live="timeleft"]');
+  if (tls.length) { const h = timeLeftInner(); tls.forEach(el => { if (el._h !== h) { el.innerHTML = h; el._h = h; } }); }
   // break clock
   const s = state.brk.status;
   const interval = s.intervalSeconds || D.settings.breakInterval * 60;
@@ -1706,6 +1921,23 @@ const ACTIONS = {
   },
   'widgets-manage': () => { go('settings'); setTimeout(() => { const c = document.getElementById('set-widgets'); c && c.scrollIntoView({ behavior: 'smooth', block: 'center' }); c && c.classList.add('flash'); }, 450); },
   'widget-toggle': (el) => setWidget(el.dataset.v, !widgetOn(el.dataset.v)),
+  'widget-move': (el) => moveWidget(el.dataset.v, +el.dataset.dir),
+  'widget-page': (el) => { const p = D.settings.widgetPages = { ...(D.settings.widgetPages || {}) }; p[el.dataset.v] = p[el.dataset.v] === false; save(); refresh(); },
+  'work-setup': () => { go('settings'); setTimeout(() => { const c = document.getElementById('set-work'); c && c.scrollIntoView({ behavior: 'smooth', block: 'center' }); c && c.classList.add('flash'); }, 450); },
+  'work-rotate': (el) => { const w = work(); w.rotate = el.dataset.v === '1'; if (w.rotate && !w.anchor) w.anchor = dayKey(mondayOf(new Date())); save(); refresh(); },
+  'work-this': (el) => { const w = work(); const m = mondayOf(new Date()); if (el.dataset.v === '1') m.setDate(m.getDate() - 7); w.anchor = dayKey(m); save(); refresh(); toast(`This week is Week ${+el.dataset.v + 1}`, { ic: 'clock' }); },
+  'work-day': (el) => { const w = work(); const wk = w.weeks[+el.dataset.w]; const d = +el.dataset.v; wk.days = wk.days.includes(d) ? wk.days.filter(x => x !== d) : [...wk.days, d].sort(); save(); refresh(); },
+  'wx-find': async () => {
+    const q = ($('#wx-q') || {}).value || ''; if (!q.trim()) return;
+    if (!api.weatherFind) { toast('Weather works in the desktop app', { ic: 'cloud' }); return; }
+    state.wxResults = await api.weatherFind(q.trim()); state.wxQ = q; redrawWidget('weather');
+    const i = $('#wx-q'); if (i) { i.value = q; i.focus(); }
+  },
+  'wx-pick': (el) => { const r = (state.wxResults || [])[+el.dataset.i]; if (!r) return; D.settings.weather = { name: r.name, region: r.region, country: r.country, lat: r.lat, lon: r.lon }; state.wxResults = null; state.wxEdit = false; state.wx = {}; save(); redrawWidget('weather'); },
+  'wx-change': () => { state.wxEdit = true; state.wxResults = null; redrawWidget('weather'); setTimeout(() => { const i = $('#wx-q'); i && i.focus(); }, 30); },
+  'wx-cancel': () => { state.wxEdit = false; state.wxResults = null; redrawWidget('weather'); },
+  'wx-retry': () => { loadWeather(true); redrawWidget('weather'); },
+  'snip-pin': (el, id) => { const x = D.snippets.find(y => y.id === id); if (!x) return; x.pinned = !x.pinned; x.pinnedAt = Date.now(); save(); refresh(); toast(x.pinned ? (widgetOn('snips') ? 'Pinned to the Pinned snippets widget' : 'Pinned. Turn on the Pinned snippets widget in Settings to see it.') : 'Unpinned', { ic: 'pin' }); },
   'brk-taken': () => { countBreak(); api.breakTaken().then(setBreakStatus); toast('Break logged. Clock reset.', { ic: 'coffee' }); },
   'brk-done': () => { countBreak(); closeBreak(); api.breakTaken().then(setBreakStatus); toast('Welcome back. Clock reset.', { ic: 'leaf' }); },
   'brk-snooze': () => { closeBreak(); api.breakSnooze().then(setBreakStatus); toast(`Snoozed for ${D.settings.snoozeMinutes} minutes`, { ic: 'clock' }); },
@@ -1834,6 +2066,7 @@ const ACTIONS = {
   'set-toggle': (el) => {
     const k = el.dataset.v; D.settings[k] = !D.settings[k]; el.classList.toggle('on', D.settings[k]); save();
     if (k === 'seasonFx') applyTheme();
+    if (k === 'widgetsElsewhere') { refresh(); if (D.settings.widgetsElsewhere) toast('Widgets will show on the pages ticked below', { ic: 'sliders' }); }
     if (k === 'spellcheck') { api.spellApply && api.spellApply({ spellcheck: D.settings.spellcheck, spellLang: D.settings.spellLang }); toast(D.settings.spellcheck ? 'Spell check on' : 'Spell check off', { ic: 'check' }); }
     if (k === 'navCollapsed') { D.settings.navCollapsed = !D.settings.navCollapsed; toggleNav(); return; }
     if (k === 'sounds') { Sound.applyVolumes(); buildSidebar(); updateSidebar(); }
@@ -1925,6 +2158,7 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('input', (e) => {
   const t = e.target;
   if (t.dataset.pnext) { const p = P.get(t.dataset.pid); if (p) { p.nextAction = t.value; save(); } return; }
+  if (t.dataset.work) { const [wi, k] = t.dataset.work.split('.'); if (/^\d{2}:\d{2}$/.test(t.value)) { work().weeks[+wi][k] = t.value; save(); updateLive(); } return; }
   if (t.dataset.pnotes) { const p = P.get(t.dataset.pid); if (p) { p.notes = t.value; p.updatedAt = Date.now(); clearTimeout(t._sv); t._sv = setTimeout(save, 400); } growBox(t); return; }
   if (t.dataset.rbind) {
     const r = D.recurring.find(x => x.id === (t.closest('[data-id]') || {}).dataset?.id); if (!r) return;

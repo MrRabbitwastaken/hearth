@@ -11,11 +11,11 @@ Grab the latest files from the **Releases** page on GitHub. Every push to `main`
 
 ### Building it yourself
 
-**Make the installer once:** double-click **`Make-Installer.bat`**. You don't need to install anything first. If Node.js isn't on the PC, the script downloads a private copy into a `.tools` folder, used only for building. After a few minutes it opens `dist\` with **`Hearth-Setup-1.6.1.exe`**.
+**Make the installer once:** double-click **`Make-Installer.bat`**. You don't need to install anything first. If Node.js isn't on the PC, the script downloads a private copy into a `.tools` folder, used only for building. After a few minutes it opens `dist\` with **`Hearth-Setup-1.7.0.exe`**.
 
-**Install:** double-click `Hearth-Setup-1.6.1.exe`. A setup wizard lets you choose just-me or all users and the install folder. It creates Start menu and desktop shortcuts, launches Hearth when it finishes, and adds an uninstaller in Windows *Apps*.
+**Install:** double-click `Hearth-Setup-1.7.0.exe`. A setup wizard lets you choose just-me or all users and the install folder. It creates Start menu and desktop shortcuts, launches Hearth when it finishes, and adds an uninstaller in Windows *Apps*.
 
-- **Silent install** (e.g. NinjaOne): `Hearth-Setup-1.6.1.exe /S`. Add `/allusers` for a machine-wide install.
+- **Silent install** (e.g. NinjaOne): `Hearth-Setup-1.7.0.exe /S`. Add `/allusers` for a machine-wide install.
 - The installer isn't code-signed, so Windows SmartScreen may say "Windows protected your PC" the first time. Click **More info → Run anyway**. Silent installs aren't affected.
 - Optional: if this folder is pushed to GitHub, `.github/workflows/build-installer.yml` builds the installer automatically on every push.
 - `run-dev.bat` runs Hearth straight from the source folder, for trying changes.
@@ -63,7 +63,12 @@ Your data is kept when you install a newer version over the top.
 
 **Make it yours (Settings)**:
 - **Spell check** (on by default, English UK): misspelt words get a red squiggle in notes, stickies, tasks and project notes. Right-click one for suggestions or *Add to dictionary*. Right-click in any text box also gives Cut, Copy, Paste and Select all. Switch it off or change the dictionary (UK, US, Australia, Canada) under *You & appearance*.
-- **Today widgets**: right-click any card down the side of Today (Water, Good-day score, Focus, Projects…) and choose *Hide*. Bring cards back under Settings → *Today widgets*.
+- **Widgets**: right-click any card down the side of Today to move it up or down, or hide it. Settings → *Today widgets* has the full list with arrows and on/off switches. Turn on *Show widgets on other pages* to put the same column on Projects, Notebooks, Calendar and the rest, page by page.
+  - **Time left today**: a bar counting down your working day. Set your hours in Settings → *Work hours*, including a **two-week rotation** (e.g. 8:00–4:30 one week, 9:30–6:00 the next) and which days you work. Pick which week this is and it swaps every Monday.
+  - **Weather**: type your town once. It shows today's forecast, the next few hours and a nudge when rain is coming (free Open-Meteo service, no account needed).
+  - **Deadlines**: projects due in the next two weeks, overdue ones in red.
+  - **Ribbons**: every notebook page with a ribbon, one click to jump there.
+  - **Pinned snippets**: pin snippets or links (📌 on the Snippets page) for one-click Copy/Open.
 - Show, hide or reorder sidebar pages, or shrink the sidebar to icons only.
 - Daylight or Evening theme.
 - **Seasonal themes** (Auto, Autumn, Winter, Spring, Summer) with their own colours (spring greens, summer blues). Drifting leaves, snow, petals or sun motes are optional and off by default.

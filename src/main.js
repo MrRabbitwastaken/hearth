@@ -682,6 +682,31 @@ ipcMain.handle('spell:langs', () => {
   return list;
 });
 
+// ------------------------------------------------------------------ weather (Open-Meteo, free and keyless)
+async function getJSON(url) {
+  const r = await net.fetch(url, { headers: { 'User-Agent': 'Hearth/' + app.getVersion() } });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+ipcMain.handle('weather:find', async (e, q) => {
+  if (typeof q !== 'string' || !q.trim() || q.length > 80) return [];
+  try {
+    const j = await getJSON('https://geocoding-api.open-meteo.com/v1/search?count=6&language=en&format=json&name=' + encodeURIComponent(q.trim()));
+    return (j.results || []).map(r => ({ name: r.name, region: r.admin1 || '', country: r.country || '', lat: r.latitude, lon: r.longitude }));
+  } catch (err) { return { error: String(err.message || err) }; }
+});
+ipcMain.handle('weather:get', async (e, o) => {
+  const lat = +(o && o.lat), lon = +(o && o.lon);
+  if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return { error: 'Bad location' };
+  try {
+    return await getJSON(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+      '&current=temperature_2m,apparent_temperature,weather_code,is_day,wind_speed_10m' +
+      '&hourly=temperature_2m,weather_code,precipitation_probability' +
+      '&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max' +
+      '&wind_speed_unit=mph&timezone=auto&forecast_days=2');
+  } catch (err) { return { error: String(err.message || err) }; }
+});
+
 app.whenReady().then(() => {
   protocol.handle('hearth', (req) => {
     const u = new URL(req.url);

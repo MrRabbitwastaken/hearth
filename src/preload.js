@@ -40,6 +40,8 @@ contextBridge.exposeInMainWorld('hearth', {
   onStreamState: on('sound:stream'),
   pickVideo: () => ipcRenderer.invoke('notes:pickVideo'),
   onSpellMenu: on('spell:menu'),
+  weatherFind: (q) => ipcRenderer.invoke('weather:find', q),
+  weatherGet: (o) => ipcRenderer.invoke('weather:get', o),
   spellReplace: (w) => ipcRenderer.invoke('spell:replace', w),
   spellAdd: (w) => ipcRenderer.invoke('spell:add', w),
   spellEdit: (cmd) => ipcRenderer.invoke('spell:edit', cmd),
