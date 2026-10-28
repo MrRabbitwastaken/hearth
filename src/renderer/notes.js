@@ -287,7 +287,6 @@ function nbRow(nb) {
       <span class="nb-chev ${open ? 'open' : ''}" data-act="nb-toggle" data-nb="${nb.id}">${icon('chevron', 'sm')}</span>
     </button>
     ${open ? `<div class="nb-pages">
-      <button class="pg-row cover ${active && !ns.pgId ? 'active' : ''}" data-act="pg-open" data-nb="${nb.id}" data-pg="">${icon('book', 'sm')}<span class="t">Inside cover</span></button>
       ${loose.map(p => pgRowHtml(nb, p, pages.indexOf(p))).join('')}
       ${chaps.map(c => {
         const cp = pages.filter(p => p.chapterId === c.id);
@@ -1358,7 +1357,8 @@ function deskTopHtml(nb, pg, idx, pages) {
   const tool = ns.tool;
   return `<div class="desk-top">
       <button class="icon-btn shelf-toggle" data-act="shelf-toggle" title="${ns.shelfHidden ? 'Show notebooks' : 'Hide notebooks'} (Ctrl+Shift+\\)">${icon('sidebar', 'sm')}</button>
-      <div class="crumbs"><span class="nb-dot" style="background:${nb.color}"></span><b>${esc(nb.name)}</b>${pg ? ` <span class="muted">›</span> <span class="crumb-pg">${esc(pageLabel(pg, idx))}</span>` : ' <span class="muted">› Inside cover</span>'}</div>
+      <div class="crumbs"><button class="crumb-btn" data-act="nb-switch" title="Switch notebook"><span class="nb-dot" style="background:${nb.color}"></span><b>${esc(nb.name)}</b>${icon('chevron', 'sm')}</button>
+        <span class="muted">›</span><button class="crumb-btn pg" data-act="pg-switch" title="Jump to a page"><span class="crumb-pg">${pg ? esc(pageLabel(pg, idx)) : 'Inside cover'}</span>${icon('chevron', 'sm')}</button></div>
       <div class="turners">
         <button class="icon-btn" data-act="pg-prev" title="Previous page (Alt+←)" ${idx < 0 ? 'disabled' : ''}>${icon('chevronL', 'sm')}</button>
         <span class="pg-count">${pg ? `${idx + 1} / ${pages.length}` : 'Cover'}</span>
@@ -1536,6 +1536,27 @@ const actions = {
     setTimeout(() => { const i = $('#nb-name'); if (i) { i.focus(); i.select(); } }, 950);
   },
   'nb-color': (el) => { const nb = curNb(); nb.color = el.dataset.v; H().save(); const keep = $('#desk').scrollTop; renderDesk(); $('#desk').scrollTop = keep; renderShelf(); },
+  'nb-switch': (el) => {
+    const r = el.getBoundingClientRect();
+    ctxMenu([{ header: 'Notebooks' }, ...notebooks().map(n => ({ label: n.name, ic: n.id === ns.nbId ? 'check' : 'book', color: n.color,
+      fn: () => { if (n.id !== ns.nbId) turnTo(n.id, n.lastPg && getPg(n.lastPg) ? n.lastPg : (pagesOf(n.id)[0] || {}).id || null); } })),
+      '-', { label: 'New notebook…', ic: 'plus', fn: () => actions['nb-new']() }], r.left, r.bottom + 6);
+  },
+  'pg-switch': (el) => {
+    const nb = curNb(); if (!nb) return; const r = el.getBoundingClientRect();
+    const pages = pagesOf(nb.id);
+    const items = [{ label: 'Inside cover & settings', ic: !ns.pgId ? 'check' : 'sliders', fn: () => turnTo(nb.id, null, -1) }, '-'];
+    let lastCh = null;
+    pages.slice(-60).forEach((pg, i) => {
+      const ch = chapterOf(nb, pg);
+      if (ch && ch.id !== lastCh) items.push({ header: ch.name });
+      if (!ch && lastCh) items.push('-');
+      lastCh = ch ? ch.id : null;
+      items.push({ label: pageLabel(pg, pages.indexOf(pg)), ic: pg.id === ns.pgId ? 'check' : pg.bookmarked ? 'ribbon' : 'note', fn: () => turnTo(nb.id, pg.id) });
+    });
+    if (nb.kind !== 'journal') items.push('-', { label: 'New page', ic: 'plus', fn: () => actions['pg-new']({ dataset: { nb: nb.id } }) });
+    const m = ctxMenu(items, r.left, r.bottom + 6); m.classList.add('scroll-menu');
+  },
   'nb-style': (el) => {
     const nb = curNb(); if ((nb.style || 'book') === el.dataset.v) return;
     nb.style = el.dataset.v; H().save();
@@ -2003,7 +2024,7 @@ function ctxMenu(items, x, y, opts = {}) {
     const b = document.createElement('button');
     b.className = (it.danger ? 'danger ' : '') + (it.sub ? 'has-sub' : '');
     b.disabled = !!it.disabled;
-    b.innerHTML = `${icon(it.ic || 'dot', 'sm')}<span class="mi"${it.font ? ` style="font-family:${esc(it.font)}"` : ''}>${esc(it.label)}</span>${it.sub ? `<span class="sub-arrow">${icon('chevronR', 'sm')}</span>` : it.hint ? `<kbd>${esc(it.hint)}</kbd>` : ''}`;
+    b.innerHTML = `${it.color ? `<span class="mi-dot" style="--c:${esc(it.color)}">${icon(it.ic || 'dot', 'sm')}</span>` : icon(it.ic || 'dot', 'sm')}<span class="mi"${it.font ? ` style="font-family:${esc(it.font)}"` : ''}>${esc(it.label)}</span>${it.sub ? `<span class="sub-arrow">${icon('chevronR', 'sm')}</span>` : it.hint ? `<kbd>${esc(it.hint)}</kbd>` : ''}`;
     if (it.sub) {
       const openSub = () => {
         $$('.menu.ctx').forEach(x => x.classList.remove('sub-open-from'));

@@ -11,11 +11,11 @@ Grab the latest files from the **Releases** page on GitHub. Every push to `main`
 
 ### Building it yourself
 
-**Make the installer once:** double-click **`Make-Installer.bat`**. You don't need to install anything first. If Node.js isn't on the PC, the script downloads a private copy into a `.tools` folder, used only for building. After a few minutes it opens `dist\` with **`Hearth-Setup-1.7.0.exe`**.
+**Make the installer once:** double-click **`Make-Installer.bat`**. You don't need to install anything first. If Node.js isn't on the PC, the script downloads a private copy into a `.tools` folder, used only for building. After a few minutes it opens `dist\` with **`Hearth-Setup-1.7.1.exe`**.
 
-**Install:** double-click `Hearth-Setup-1.7.0.exe`. A setup wizard lets you choose just-me or all users and the install folder. It creates Start menu and desktop shortcuts, launches Hearth when it finishes, and adds an uninstaller in Windows *Apps*.
+**Install:** double-click `Hearth-Setup-1.7.1.exe`. A setup wizard lets you choose just-me or all users and the install folder. It creates Start menu and desktop shortcuts, launches Hearth when it finishes, and adds an uninstaller in Windows *Apps*.
 
-- **Silent install** (e.g. NinjaOne): `Hearth-Setup-1.7.0.exe /S`. Add `/allusers` for a machine-wide install.
+- **Silent install** (e.g. NinjaOne): `Hearth-Setup-1.7.1.exe /S`. Add `/allusers` for a machine-wide install.
 - The installer isn't code-signed, so Windows SmartScreen may say "Windows protected your PC" the first time. Click **More info → Run anyway**. Silent installs aren't affected.
 - Optional: if this folder is pushed to GitHub, `.github/workflows/build-installer.yml` builds the installer automatically on every push.
 - `run-dev.bat` runs Hearth straight from the source folder, for trying changes.
@@ -46,6 +46,7 @@ Your data is kept when you install a newer version over the top.
 - A *good-day score* (tasks, focus, breaks and water) with a streak. Weekends don't break the streak.
 
 **Notebooks**: pages that turn (click any line on a page to start writing there), pencil handwriting, sticky notes you can drag about, pencil and highlighter, pasted images and links, highlight text → task, ribbons, journal, search and PDF export.
+- **Switch book or page from the top bar**: click the notebook name above the page for a list of your notebooks, or the page name for that notebook's pages (and its inside cover). Handy when the shelf is hidden.
 - **Book or Simple**: a new notebook asks which style you want. *Book* has pages that turn, handwriting and lined paper. *Simple* is full width with a plain font (Calibri) and the page date and time under the title, like OneNote. You can switch on the inside cover.
 - **Fonts**: the **Font** button in the notebook toolbar changes the font across every notebook. *Automatic* means handwriting in books and Calibri in simple notebooks. Highlight some text and click **Font** to give just that text its own font, which is handy for PowerShell lines in Consolas.
 - **Templates**: meeting, 1:1, incident report, change request, project kick-off, stand-up and checklist. You can also save any page as your own template.
@@ -57,7 +58,7 @@ Your data is kept when you install a newer version over the top.
 
 **Projects**: click the expand arrow on a project to see every task with its tick box, add tasks, set the next action and keep **notes** right there (they save as you type and are the same notes as in *Details*). Hearth remembers which projects you left expanded. *Expand all / Simplify all* switches them all at once.
 
-**Recurring routines**: click a routine to open it and add notes, a priority, steps (these become subtasks), the time, the days and the project. Each task it creates carries these with it. *Add one to today now* creates one straight away.
+**Recurring routines**: monthly ones can run on a set day (e.g. the 1st), the **first working day** or the **last working day** of the month (Mon–Fri). Click a routine to open it and add notes, a priority, steps (these become subtasks), the time, the days and the project. Each task it creates carries these with it. *Add one to today now* creates one straight away.
 
 **Plus**: Waiting on, snippets & links, a weekly review with a copyable summary, morning brief, end-of-day wrap-up, and quick capture with **Ctrl+Alt+Space** (Tab switches between task and sticky note).
 

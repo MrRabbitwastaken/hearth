@@ -638,3 +638,15 @@ body.resizing-photo, body.resizing-photo * { cursor: nwse-resize !important; use
 .nbs-prev.simple em { margin: 0 0 9px 18px; height: 2px; background: #6d6d70; transform: none; width: 78%; }
 .nbs-prev.simple em.s { width: 52%; }
 @media (max-width: 560px) { .nbs-grid { grid-template-columns: 1fr; } }
+
+/* breadcrumb switchers (notebook / page) */
+.crumbs { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.crumb-btn { display: inline-flex; align-items: center; gap: 7px; border: 0; background: transparent; color: var(--text); padding: 5px 8px; margin: 0 -2px; border-radius: 9px; min-width: 0; font: inherit; cursor: pointer; transition: background .2s; }
+.crumb-btn b, .crumb-btn .crumb-pg { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
+.crumb-btn.pg .crumb-pg { color: var(--text-2); }
+.crumb-btn > svg { width: 13px; height: 13px; color: var(--text-3); opacity: .5; transition: opacity .2s, transform .2s; flex: none; }
+.crumb-btn:hover { background: var(--surface-2); }
+.crumb-btn:hover > svg { opacity: 1; transform: translateY(1px); }
+.menu .mi-dot { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; background: var(--c); color: #fff; flex: none; }
+.menu .mi-dot svg { width: 12px; height: 12px; }
+.menu.scroll-menu { max-height: min(70vh, 560px); overflow-y: auto; }

@@ -208,6 +208,14 @@ function newTask(title, { date, projectId = null, recurringId = null } = {}) {
 function touchProject(pid) { const p = P.get(pid); if (p) p.updatedAt = Date.now(); }
 
 // ------------------------------------------------------------------ recurring
+// first or last Monday–Friday of a month, as a day key
+function workingDayOfMonth(y, m, which) {
+  const t = which === 'last' ? new Date(y, m + 1, 0) : new Date(y, m, 1);
+  const step = which === 'last' ? -1 : 1;
+  while (t.getDay() === 0 || t.getDay() === 6) t.setDate(t.getDate() + step);
+  return dayKey(t);
+}
+const MDAY_OPTS = [['day', 'On a day of the month'], ['first', 'First working day'], ['last', 'Last working day']];
 function ruleMatches(r, k) {
   const d = parseKey(k), wd = d.getDay();
   switch (r.freq) {
@@ -215,6 +223,7 @@ function ruleMatches(r, k) {
     case 'weekdays': return wd >= 1 && wd <= 5;
     case 'weekly': return (r.days || []).includes(wd);
     case 'monthly': {
+      if (r.mday === 'first' || r.mday === 'last') return k === workingDayOfMonth(d.getFullYear(), d.getMonth(), r.mday);
       const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
       return d.getDate() === Math.min(r.dom || 1, last);
     }
@@ -229,7 +238,7 @@ function describeRule(r) {
     const days = order.filter(d => (r.days || []).includes(d)).map(d => WEEKDAYS[d]);
     return days.length ? 'Every ' + days.join(', ') : 'Weekly (no days picked)';
   }
-  if (r.freq === 'monthly') return `Monthly on the ${ordinal(r.dom || 1)}`;
+  if (r.freq === 'monthly') return r.mday === 'first' ? 'Monthly on the first working day' : r.mday === 'last' ? 'Monthly on the last working day' : `Monthly on the ${ordinal(r.dom || 1)}`;
   return '';
 }
 function nextOccurrence(r) {
@@ -1144,9 +1153,10 @@ function viewRecurring() {
           <option value="daily" ${f.freq === 'daily' ? 'selected' : ''}>Every day</option>
           <option value="weekdays" ${f.freq === 'weekdays' ? 'selected' : ''}>Weekdays</option>
           <option value="weekly" ${f.freq === 'weekly' ? 'selected' : ''}>Weekly on…</option>
-          <option value="monthly" ${f.freq === 'monthly' ? 'selected' : ''}>Monthly on day…</option></select></div>
+          <option value="monthly" ${f.freq === 'monthly' ? 'selected' : ''}>Monthly…</option></select></div>
         ${f.freq === 'weekly' ? `<div class="field"><label>Days</label><div class="day-chips">${order.map(d => `<button class="day-chip ${f.days.includes(d) ? 'on' : ''}" data-act="rec-day" data-v="${d}">${WEEKDAYS[d][0]}</button>`).join('')}</div></div>` : ''}
-        ${f.freq === 'monthly' ? `<div class="field"><label>Day</label><input class="input num-input" id="r-dom" type="number" min="1" max="31" value="${f.dom}"></div>` : ''}
+        ${f.freq === 'monthly' ? `<div class="field" style="min-width:190px"><label>When</label><select class="select" id="r-mday">${MDAY_OPTS.map(([v, l]) => `<option value="${v}" ${(f.mday || 'day') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+          ${(f.mday || 'day') === 'day' ? `<div class="field"><label>Day</label><input class="input num-input" id="r-dom" type="number" min="1" max="31" value="${f.dom}"></div>` : ''}` : ''}
         <div class="field" style="min-width:160px"><label>Project</label><select class="select" id="r-project">${projectOptions('')}</select></div>
         <button class="btn primary" data-act="rec-add" style="height:42px">${icon('plus', 'sm')}Add</button>
       </div></div>
@@ -1182,9 +1192,10 @@ function recRow(r) {
       <div class="rec-grid">
         <div class="field" style="grid-column:1/-1"><label>Task name</label><input class="input" id="rt-${r.id}" data-rbind="title" value="${esc(r.title)}" maxlength="300"></div>
         <div class="field"><label>Repeats</label><select class="select" data-rbind="freq">
-          ${[['daily', 'Every day'], ['weekdays', 'Weekdays'], ['weekly', 'Weekly on…'], ['monthly', 'Monthly on day…']].map(([v, l]) => `<option value="${v}" ${r.freq === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+          ${[['daily', 'Every day'], ['weekdays', 'Weekdays'], ['weekly', 'Weekly on…'], ['monthly', 'Monthly…']].map(([v, l]) => `<option value="${v}" ${r.freq === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
         ${r.freq === 'weekly' ? `<div class="field"><label>Days</label><div class="day-chips">${order.map(d => `<button class="day-chip ${(r.days || []).includes(d) ? 'on' : ''}" data-act="rec-eday" data-v="${d}">${WEEKDAYS[d][0]}</button>`).join('')}</div></div>` : ''}
-        ${r.freq === 'monthly' ? `<div class="field"><label>Day of month</label><input class="input num-input" type="number" min="1" max="31" data-rbind="dom" value="${r.dom || 1}"></div>` : ''}
+        ${r.freq === 'monthly' ? `<div class="field"><label>When</label><select class="select" data-rbind="mday">${MDAY_OPTS.map(([v, l]) => `<option value="${v}" ${(r.mday || 'day') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+          ${(r.mday || 'day') === 'day' ? `<div class="field"><label>Day of month</label><input class="input num-input" type="number" min="1" max="31" data-rbind="dom" value="${r.dom || 1}"></div>` : ''}` : ''}
         <div class="field"><label>Time (optional)</label><input class="input" type="time" data-rbind="time" value="${r.time || ''}"></div>
         <div class="field"><label>Priority</label><div class="seg prio-seg">${[0, 1, 2, 3].map(n => `<button data-act="rec-prio" data-v="${n}" class="${(r.priority || 0) === n ? 'on' : ''} ${n ? 'p' + n : ''}">${n ? 'P' + n : 'None'}</button>`).join('')}</div></div>
         <div class="field"><label>Project</label><select class="select" data-rbind="projectId">${projectOptions(r.projectId || '')}</select></div>
@@ -2008,7 +2019,7 @@ const ACTIONS = {
     if (!title.value.trim()) { title.focus(); return; }
     if (f.freq === 'weekly' && !f.days.length) { toast('Pick at least one day', { ic: 'calendar' }); return; }
     const dom = $('#r-dom') ? Math.max(1, Math.min(31, +$('#r-dom').value || 1)) : f.dom;
-    D.recurring.push({ id: uid(), title: title.value.trim(), freq: f.freq, days: f.days.slice(), dom, projectId: $('#r-project').value || null, active: true, createdAt: Date.now() });
+    D.recurring.push({ id: uid(), title: title.value.trim(), freq: f.freq, days: f.days.slice(), dom, mday: f.freq === 'monthly' ? (f.mday || 'day') : 'day', projectId: $('#r-project').value || null, active: true, createdAt: Date.now() });
     ensureRecurring();
     state.recDraft = '';
     save(); refresh();
@@ -2169,7 +2180,7 @@ document.addEventListener('input', (e) => {
     r[k] = v;
     if (k === 'freq' && v === 'weekly' && !(r.days || []).length) r.days = [1];
     save();
-    if (k === 'freq' || k === 'projectId' || k === 'time') refresh(); else refreshQuiet();
+    if (k === 'freq' || k === 'mday' || k === 'projectId' || k === 'time') refresh(); else refreshQuiet();
     return;
   }
   if (t.dataset.rstep) {
@@ -2211,6 +2222,7 @@ document.addEventListener('change', (e) => {
   if (t.id === 'add-project') state.addProject = t.value;
   if (t.id === 'r-freq') { state.recForm.freq = t.value; keepRecTitle(); }
   if (t.id === 'r-dom') state.recForm.dom = +t.value || 1;
+  if (t.id === 'r-mday') { state.recForm.mday = t.value; keepRecTitle(); }
   if (t.dataset.pbind === 'due' || t.dataset.pbind === 'name') refresh();
   if (t.dataset.set === 'volume') Sound.play('tick');
   if (t.dataset.set === 'waterGoal' || t.dataset.set === 'dayStart' || t.dataset.set === 'dayEnd') refresh();
