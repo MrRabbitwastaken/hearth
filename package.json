@@ -1,7 +1,7 @@
 {
   "name": "hearth",
   "productName": "Hearth",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "description": "A warm little work assistant: daily tasks, projects, calendar, notebooks, screen breaks and focus time.",
   "main": "src/main.js",
   "author": "Jake",

@@ -472,28 +472,45 @@ function embedUrl(raw) {
   return u.href; // a direct audio/stream link
 }
 let player = null, playerUrl = null, playerVol = .4, appliedVol = 0, fadeTimer = null, pollTimer = null;
-// Sets the level inside the hidden player page and installs a guard there: YouTube's own player puts the
-// volume back to its saved level whenever the video loops, re-buffers or changes quality, which made the
-// sound jump loud then quiet. The guard snaps any change straight back to Hearth's level (window.__hv).
+// The hidden player page's sound is routed through Web Audio: every <video>/<audio> goes into a gain node
+// (Hearth's volume) and then a limiter. The element itself is pinned at full volume, so when YouTube resets
+// "its" volume (on loop, re-buffer, quality change) nothing changes: Hearth's gain is the only real control,
+// and the limiter stops any sudden loud passage from spiking. If Web Audio isn't available it falls back to
+// pinning the element's own volume.
 const PLAYER_JS = (v) => `(() => { const v = ${Math.max(0, Math.min(1, v)).toFixed(4)};
   window.__hv = v;
-  if (!window.__hguard) {
-    window.__hguard = true;
-    const near = (x) => Math.abs(x.volume - window.__hv) < 0.004;
-    window.__hfix = (x) => {
-      if (x.__hg) return; x.__hg = true;
-      x.addEventListener('volumechange', () => { if (x.muted) x.muted = false; if (!near(x)) x.volume = window.__hv; });
-      ['playing', 'loadeddata', 'seeked', 'ratechange'].forEach(ev => x.addEventListener(ev, () => { if (!near(x)) x.volume = window.__hv; }));
+  if (!window.__hsetup) {
+    window.__hsetup = true;
+    try {
+      const ac = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'playback' });
+      const gain = ac.createGain(); gain.gain.value = 0;
+      const lim = ac.createDynamicsCompressor();
+      lim.threshold.value = -12; lim.knee.value = 3; lim.ratio.value = 20; lim.attack.value = 0.002; lim.release.value = 0.25;
+      gain.connect(lim); lim.connect(ac.destination);
+      window.__hac = ac; window.__hgain = gain;
+    } catch (e) { window.__hac = null; }
+    window.__hroute = (x) => {
+      if (x.__hr) return; x.__hr = true;
+      if (window.__hac) { try { window.__hac.createMediaElementSource(x).connect(window.__hgain); x.__hwa = true; } catch (e) { x.__hwa = false; } }
+      x.__hpin = () => { const want = x.__hwa ? 1 : window.__hv; if (x.muted) x.muted = false; if (Math.abs(x.volume - want) > 0.004) x.volume = want; };
+      ['volumechange', 'play', 'playing', 'loadeddata', 'seeked', 'ratechange'].forEach(ev => x.addEventListener(ev, x.__hpin));
+      x.__hpin();
     };
-    new MutationObserver(() => document.querySelectorAll('video,audio').forEach(window.__hfix)).observe(document.documentElement, { childList: true, subtree: true });
-    setInterval(() => document.querySelectorAll('video,audio').forEach(x => { window.__hfix(x); if (!near(x)) x.volume = window.__hv; }), 300);
+    const all = () => document.querySelectorAll('video,audio');
+    new MutationObserver(() => all().forEach(window.__hroute)).observe(document.documentElement, { childList: true, subtree: true });
+    setInterval(() => { all().forEach(x => { window.__hroute(x); x.__hpin(); }); if (window.__hac && window.__hac.state === 'suspended') window.__hac.resume().catch(() => {}); }, 250);
     try { localStorage.setItem('yt-player-volume', JSON.stringify({ data: JSON.stringify({ volume: 100, muted: false }), expiration: Date.now() + 864e8, creation: Date.now() })); } catch (e) {}
+  }
+  if (window.__hac) {
+    if (window.__hac.state === 'suspended') window.__hac.resume().catch(() => {});
+    const g = window.__hgain.gain, t = window.__hac.currentTime;
+    g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.setTargetAtTime(v, t, 0.04);
   }
   try { const mp = document.getElementById('movie_player'); if (mp && mp.setVolume && !window.__hapi) { window.__hapi = true; mp.unMute && mp.unMute(); mp.setVolume(100); } } catch (e) {}
   const m = [...document.querySelectorAll('video,audio')];
-  m.forEach(x => { window.__hfix(x); x.loop = true; x.muted = false; x.volume = v; if (x.paused) x.play().catch(() => {}); });
+  m.forEach(x => { window.__hroute(x); x.loop = true; x.__hpin(); if (x.paused) x.play().catch(() => {}); });
   const err = document.querySelector('.ytp-error, .ytp-error-content');
-  return { media: m.length, playing: m.some(x => !x.paused && x.readyState > 2), error: !!(err && err.offsetParent !== null) }; })()`;
+  return { media: m.length, routed: m.length > 0 && m.every(x => x.__hwa), webAudio: !!window.__hac, playing: m.some(x => !x.paused && x.readyState > 2), error: !!(err && err.offsetParent !== null) }; })()`;
 function streamSend(state) { broadcast('sound:stream', { state, url: playerUrl }); }
 function killPlayer() {
   clearInterval(fadeTimer); clearInterval(pollTimer);
@@ -524,6 +541,9 @@ function streamPlay(url, vol) {
   player.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   player.webContents.on('did-fail-load', (e, code, desc, u, isMain) => { if (isMain && code !== -3) { streamSend('error'); killPlayer(); } });
   player.webContents.on('render-process-gone', () => { streamSend('error'); killPlayer(); });
+  // silent until Hearth's own volume control is in place, so nothing can blast out at start-up
+  player.webContents.setAudioMuted(true);
+  player.webContents.on('dom-ready', () => { if (player && !player.isDestroyed()) player.webContents.executeJavaScript(PLAYER_JS(0)).catch(() => {}); });
   player.loadURL(target, { httpReferrer: 'https://hearth.app/' }).catch(() => {});
   streamSend('loading');
   // start quiet and fade up once something is playing; give up after ~25s
@@ -534,7 +554,12 @@ function streamPlay(url, vol) {
     let r = null;
     try { r = await player.webContents.executeJavaScript(PLAYER_JS(0.001)); } catch (_) {}
     if (r && r.error) { clearInterval(pollTimer); streamSend('error'); killPlayer(); return; }
-    if (r && r.playing && !started) { started = true; streamSend('playing'); appliedVol = 0.001; clearInterval(pollTimer); setPlayerVolume(playerVol, 2500); keepAlive(); return; }
+    if (r && r.playing && !started && (r.routed || !r.webAudio || tries > 12)) {
+      started = true; streamSend('playing'); appliedVol = 0.001; clearInterval(pollTimer);
+      try { player.webContents.executeJavaScript(PLAYER_JS(0.001)).catch(() => {}); } catch (_) {}
+      setTimeout(() => { if (player && !player.isDestroyed()) { player.webContents.setAudioMuted(false); setPlayerVolume(playerVol, 2500); } }, 150);
+      keepAlive(); return;
+    }
     if (tries > 50) { clearInterval(pollTimer); streamSend('error'); killPlayer(); }
   }, 500);
   return true;
