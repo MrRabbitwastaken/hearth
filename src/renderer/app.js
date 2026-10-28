@@ -846,8 +846,24 @@ function projectCard(p) {
 }
 
 // project notes boxes grow with their text
-function growBox(t) { t.style.height = 'auto'; t.style.height = Math.min(520, t.scrollHeight + 2) + 'px'; }
+// grows with the text up to a limit, then scrolls inside (mouse wheel or the scroll bar)
+const NOTES_MAX = 340;
+function growBox(t) {
+  if (t.dataset.userSized) return; // the user dragged the corner: keep their size
+  const keep = t.scrollTop;
+  t.style.height = 'auto';
+  const full = t.scrollHeight + 2;
+  t.style.height = Math.min(NOTES_MAX, full) + 'px';
+  t.classList.toggle('scrolls', full > NOTES_MAX);
+  t.scrollTop = keep;
+}
 function growNotes() { document.querySelectorAll('.pb-notes-box').forEach(growBox); }
+// dragging the resize corner switches off auto-sizing for that box
+document.addEventListener('pointerdown', (e) => {
+  const t = e.target.closest && e.target.closest('.pb-notes-box'); if (!t) return;
+  const r = t.getBoundingClientRect();
+  if (e.clientX > r.right - 18 && e.clientY > r.bottom - 18) { t.dataset.userSized = '1'; t.classList.add('scrolls'); }
+}, true);
 function projectCardBig(p) {
   const tasks = T.ofProject(p.id);
   const open = tasks.filter(t => !t.done).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999') || byOrder(a, b));

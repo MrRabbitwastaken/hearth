@@ -380,7 +380,12 @@ html.nav-collapsed .clock-widget .meta, html.nav-collapsed .clock-widget .mini-b
 /* project notes in the expanded card */
 .pb-notes { display: flex; flex-direction: column; gap: 6px; padding-top: 12px; border-top: 1px dashed var(--line); }
 .pb-notes .label-sm { display: inline-flex; align-items: center; gap: 6px; }
-.pb-notes-box { min-height: 74px; resize: vertical; line-height: 1.5; background: var(--bg); font-size: 13.5px; overflow: hidden; }
+.pb-notes-box { min-height: 74px; resize: vertical; line-height: 1.5; background: var(--bg); font-size: 13.5px; overflow-y: hidden; tab-size: 4; white-space: pre-wrap; }
+.pb-notes-box.scrolls { overflow-y: auto; overscroll-behavior: contain; }
+.pb-notes-box::-webkit-scrollbar { width: 10px; }
+.pb-notes-box::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--text-3) 45%, transparent); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+.pb-notes-box::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.pb-notes-box::-webkit-scrollbar-track { background: transparent; }
 .pb-notes-box:focus { background: var(--surface); }
 
 /* spelling suggestions sit first in the right-click menu */
