@@ -31,7 +31,7 @@ function defaultData() {
       wrapTime: '17:00', focusMinutes: 25, launchAtStartup: true, closeToTray: true,
       staleProjectDays: 7, hotkey: 'CommandOrControl+Alt+Space', theme: 'light',
       nav: { hidden: [], order: [] },
-      season: 'auto', seasonFx: false, noteFont: 'auto', hiddenWidgets: [], widgetOrder: [], widgetsElsewhere: false, widgetPages: {}, weather: null, spellcheck: true, spellLang: 'en-GB', bankRegion: 'england-and-wales', skipRoutinesOff: true, leaveAllowance: 0, leaveYearStart: 1, fxDefaultV2: true, customSounds: [], soundSources: {},
+      season: 'auto', seasonFx: false, noteFont: 'auto', hiddenWidgets: [], widgetOrder: [], widgetDrag: true, widgetsElsewhere: false, widgetPages: {}, weather: null, spellcheck: true, spellLang: 'en-GB', bankRegion: 'england-and-wales', skipRoutinesOff: true, leaveAllowance: 0, leaveYearStart: 1, fxDefaultV2: true, customSounds: [], soundSources: {},
       sounds: true, volume: 0.6,
       ambient: 'rain', ambientAuto: true, ambientVolume: 0.5, focusShield: true, dnd: true,
       waterOn: true, waterEvery: 90, waterGoal: 8, postureOn: true, postureEvery: 45,
@@ -830,6 +830,111 @@ function widgetsHtml() {
 // redraw one widget in place (used by weather and other async updates)
 function redrawWidget(id) { $$(`[data-k="${WIDGETS[id].k}"]`).forEach(el => { const t = document.createElement('div'); t.innerHTML = widgetHtml(id); const n = t.firstElementChild; n ? el.replaceWith(n) : el.remove(); }); }
 
+// ---------- click-and-hold to drag widgets into a new order
+let wdrag = null;
+const W_HOLD = 320, W_SLOP = 7;
+function widgetIdOf(card) { return Object.keys(WIDGETS).find(k => WIDGETS[k].k === card.dataset.k); }
+function wCards(col) { return [...col.children].filter(el => el.matches('.card[data-k]') && !el.classList.contains('w-lifted')); }
+// FLIP: animate everything from where it was to where it is now
+function wFlip(col, mutate) {
+  const els = [...col.children].filter(el => el.matches('.card[data-k], .w-ph') && !el.classList.contains('w-lifted'));
+  const before = new Map(els.map(el => [el, el.getBoundingClientRect().top]));
+  mutate();
+  els.forEach(el => {
+    const dy = before.get(el) - el.getBoundingClientRect().top;
+    if (Math.abs(dy) < 1) return;
+    el.getAnimations().forEach(a => a.cancel());
+    el.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: REDUCED ? 1 : 300, easing: 'cubic-bezier(.2, .9, .25, 1)' });
+  });
+}
+document.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 || IS_CAPTURE || D.settings.widgetDrag === false || wdrag) return;
+  const card = e.target.closest && e.target.closest('.side-col > .card[data-k]');
+  if (!card || !widgetIdOf(card)) return;
+  if (e.target.closest('button, a, input, select, textarea, label, [contenteditable="true"], .mini-sticky, .ring-reset, .amb, .wx-res')) return;
+  const col = card.parentElement;
+  wdrag = { card, col, id: widgetIdOf(card), sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, pid: e.pointerId, lifted: false };
+  card.classList.add('w-pressing');
+  wdrag.holdT = setTimeout(() => wLift(), W_HOLD);
+}, true);
+function wLift() {
+  const d = wdrag; if (!d || d.lifted) return;
+  const { card, col } = d;
+  card.classList.remove('w-pressing');
+  const r = card.getBoundingClientRect();
+  d.lifted = true; d.offY = d.y - r.top; d.offX = d.x - r.left; d.w = r.width;
+  d.scroller = col.classList.contains('wv-side') && col.scrollHeight > col.clientHeight ? col : $('.main');
+  d.origNext = card.nextElementSibling;
+  const ph = document.createElement('div'); ph.className = 'w-ph'; ph.style.height = r.height + 'px';
+  card.after(ph); d.ph = ph;
+  card.classList.add('w-lifted');
+  // float it at the top level so no animated parent can shift its position
+  document.body.appendChild(card);
+  Object.assign(card.style, { position: 'fixed', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', margin: 0, zIndex: 120 });
+  card.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.035) rotate(-.6deg)' }], { duration: 180, easing: 'ease-out', fill: 'forwards' });
+  document.body.classList.add('w-dragging');
+  try { card.setPointerCapture(d.pid); } catch (_) {}
+  window.Sound && Sound.play('tap');
+  if (navigator.vibrate) navigator.vibrate(8);
+  d.raf = requestAnimationFrame(wTick);
+}
+function wTick() {
+  const d = wdrag; if (!d || !d.lifted) return;
+  // follow the pointer (a little sideways give, mostly vertical)
+  const nx = d.sx - d.offX + (d.x - d.sx) * .25, ny = d.y - d.offY;
+  d.card.style.left = nx + 'px'; d.card.style.top = ny + 'px';
+  // auto-scroll near the edges
+  const sc = d.scroller; if (sc) { const sr = sc.getBoundingClientRect(); const edge = 70;
+    if (d.y < sr.top + edge) sc.scrollTop -= Math.ceil((sr.top + edge - d.y) / 6);
+    else if (d.y > sr.bottom - edge) sc.scrollTop += Math.ceil((d.y - (sr.bottom - edge)) / 6); }
+  // where would it land? before the first card whose middle is below the dragged card's middle
+  const mid = ny + d.card.offsetHeight / 2;
+  const cards = wCards(d.col);
+  let target = cards.find(c => { const r = c.getBoundingClientRect(); return mid < r.top + r.height / 2; }) || null;
+  const curNext = (() => { let n = d.ph.nextElementSibling; while (n && !n.matches('.card[data-k]')) n = n.nextElementSibling; return n; })();
+  if (target !== curNext && !(target === null && !curNext)) {
+    wFlip(d.col, () => { if (target) target.before(d.ph); else { const last = cards[cards.length - 1]; if (last) last.after(d.ph); } });
+  }
+  d.raf = requestAnimationFrame(wTick);
+}
+document.addEventListener('pointermove', (e) => {
+  const d = wdrag; if (!d || e.pointerId !== d.pid) return;
+  d.x = e.clientX; d.y = e.clientY;
+  if (!d.lifted && Math.hypot(d.x - d.sx, d.y - d.sy) > W_SLOP) wCancelPress();
+  else if (d.lifted) e.preventDefault();
+}, true);
+function wCancelPress() { const d = wdrag; if (!d) return; clearTimeout(d.holdT); d.card.classList.remove('w-pressing'); wdrag = null; if (d.pending) refresh(); }
+function wDrop(cancel) {
+  const d = wdrag; if (!d) return;
+  if (!d.lifted) { wCancelPress(); return; }
+  cancelAnimationFrame(d.raf);
+  const { card, ph, col } = d;
+  if (cancel) wFlip(col, () => { if (d.origNext && d.origNext.parentElement === col) d.origNext.before(ph); else col.appendChild(ph); });
+  const to = ph.getBoundingClientRect(), from = card.getBoundingClientRect();
+  const finish = () => {
+    card.getAnimations().forEach(a => a.cancel());
+    ph.replaceWith(card);
+    card.classList.remove('w-lifted'); ['position', 'left', 'top', 'width', 'margin', 'zIndex'].forEach(k => card.style[k] = '');
+    document.body.classList.remove('w-dragging');
+    // save: the visible order from the page, slotted back into the full list (hidden widgets keep their places)
+    const vis = [...col.children].filter(el => el.matches('.card[data-k]')).map(widgetIdOf).filter(Boolean);
+    const full = widgetOrder(); const slots = full.map((id, i) => vis.includes(id) ? i : -1).filter(i => i >= 0);
+    const next = full.slice(); slots.forEach((slot, n) => { next[slot] = vis[n]; });
+    const changed = next.join() !== full.join();
+    if (changed) { D.settings.widgetOrder = next; save(); }
+    const pending = d.pending; wdrag = null;
+    if (pending || changed) refresh();
+  };
+  card.animate([{ transform: 'scale(1.035) rotate(-.6deg)' }, { transform: 'none' }], { duration: 220, easing: 'ease-out', fill: 'forwards' });
+  const a = card.animate([{ left: from.left + 'px', top: from.top + 'px' }, { left: to.left + 'px', top: to.top + 'px' }], { duration: REDUCED ? 1 : 240, easing: 'cubic-bezier(.2, .9, .25, 1)', fill: 'forwards' });
+  a.finished.then(finish, finish);
+}
+document.addEventListener('pointerup', (e) => { if (wdrag && e.pointerId === wdrag.pid) { if (wdrag.lifted) e.preventDefault(); wDrop(false); } }, true);
+document.addEventListener('pointercancel', (e) => { if (wdrag && e.pointerId === wdrag.pid) wDrop(true); }, true);
+// a long press shouldn't also count as a click on whatever was underneath
+document.addEventListener('click', (e) => { if (document.body.classList.contains('w-dragging') || (wdrag && wdrag.lifted)) { e.stopPropagation(); e.preventDefault(); } }, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && wdrag) { wDrop(true); } }, true);
+
 // ---------- deadlines
 function deadlinesCard() {
   const t = today(), lim = addDays(t, 14);
@@ -1557,7 +1662,8 @@ function viewSettings() {
           <button class="icon-btn mini" data-act="widget-move" data-v="${id}" data-dir="-1" title="Move up" ${i === 0 ? 'disabled' : ''}>${icon('chevronUp', 'sm')}</button>
           <button class="icon-btn mini" data-act="widget-move" data-v="${id}" data-dir="1" title="Move down" ${i === o.length - 1 ? 'disabled' : ''}>${icon('chevron', 'sm')}</button>
           <button class="switch ${widgetOn(id) ? 'on' : ''}" data-act="widget-toggle" data-v="${id}" title="${widgetOn(id) ? 'Hide' : 'Show'}"></button></div>`; }).join('')}</div>
-        <div class="set-row" style="margin-top:8px"><div class="t"><b>Show widgets on other pages</b><span>Adds the same widget column down the right of the pages you pick.</span></div>${sw('widgetsElsewhere')}</div>
+        <div class="set-row" style="margin-top:8px"><div class="t"><b>Rearrange widgets on the page</b><span>Click and hold a widget, then drag it up or down. The others slide out of the way.</span></div>${sw('widgetDrag')}</div>
+        <div class="set-row"><div class="t"><b>Show widgets on other pages</b><span>Adds the same widget column down the right of the pages you pick.</span></div>${sw('widgetsElsewhere')}</div>
         ${s.widgetsElsewhere ? `<div class="set-row sub-row"><div class="t"><b>On</b></div><div class="page-chips">${Object.entries(WIDGET_PAGES).map(([v, l]) => `<button class="chip-toggle ${(s.widgetPages || {})[v] !== false ? 'on' : ''}" data-act="widget-page" data-v="${v}">${(s.widgetPages || {})[v] !== false ? icon('check', 'sm') : ''}${l}</button>`).join('')}</div></div>` : ''}</div>
 
       ${workSettingsCard()}
@@ -1649,6 +1755,7 @@ function renderView(transition) {
 }
 function refresh() {
   if (IS_CAPTURE) return;
+  if (wdrag) { wdrag.pending = true; return; }
   renderView(false);
   updateSidebar();
   if (state.modal) renderModal(false);

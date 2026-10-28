@@ -578,3 +578,10 @@ html.nav-collapsed .side-search span, html.nav-collapsed .side-search kbd { disp
 .pal-wrap .scrim { z-index: 0; }
 .palette { z-index: 1; }
 .set-row .t span strong { font-weight: 750; color: var(--text); }
+
+/* ---------------------------------------------------------------- drag widgets into a new order */
+.side-col > .card[data-k] { transition: box-shadow .3s var(--ease), transform .18s ease, border-color .3s; }
+.side-col > .card.w-pressing { transform: scale(.985); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent), var(--shadow-sm); transition: transform .32s ease, box-shadow .32s ease; }
+.card.w-lifted { cursor: grabbing; pointer-events: none; transition: none; box-shadow: 0 26px 50px -18px rgba(50, 30, 12, .45), 0 10px 20px -10px rgba(50, 30, 12, .25); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.w-ph { border: 2px dashed color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius: var(--radius); background: color-mix(in srgb, var(--accent) 5%, transparent); flex: none; }
+body.w-dragging, body.w-dragging * { cursor: grabbing !important; user-select: none !important; }
