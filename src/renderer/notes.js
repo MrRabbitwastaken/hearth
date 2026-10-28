@@ -17,6 +17,41 @@ const NB_COLOURS = ['#BF6239', '#6B8A5A', '#C68A27', '#8A5A6B', '#5F8496', '#8C8
 const STICKY_COLOURS = ['yellow', 'pink', 'sage', 'blue', 'peach'];
 const PENS = { graphite: '#3A3A3D', red: '#B5523F', blue: '#3E6C8A' };
 const PAPERS = [['lined', 'Lined'], ['squared', 'Squared'], ['dotted', 'Dotted'], ['plain', 'Plain']];
+// fonts for notebook pages. s = size relative to the handwriting (Caveat 25px) so each one reads at a similar size
+const FONTS = {
+  hand: { name: 'Handwriting', css: "var(--hand)", s: 1 },
+  calibri: { name: 'Calibri', css: "Calibri, Carlito, 'Segoe UI', sans-serif", s: .66 },
+  segoe: { name: 'Segoe UI', css: "'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif", s: .62 },
+  nunito: { name: 'Nunito (rounded)', css: "'Nunito Variable', Nunito, 'Segoe UI', sans-serif", s: .64 },
+  arial: { name: 'Arial', css: "Arial, 'Liberation Sans', Helvetica, sans-serif", s: .62 },
+  verdana: { name: 'Verdana', css: "Verdana, 'DejaVu Sans', sans-serif", s: .58 },
+  georgia: { name: 'Georgia', css: "Georgia, 'DejaVu Serif', serif", s: .64 },
+  times: { name: 'Times New Roman', css: "'Times New Roman', 'Liberation Serif', Times, serif", s: .7 },
+  fraunces: { name: 'Fraunces (book)', css: "'Fraunces Variable', Fraunces, Georgia, serif", s: .66 },
+  print: { name: 'Neat print', css: "'Segoe Print', 'Bradley Hand', 'Comic Sans MS', var(--hand)", s: .6 },
+  comic: { name: 'Comic Sans', css: "'Comic Sans MS', 'Comic Neue', 'Segoe Print', cursive", s: .62 },
+  mono: { name: 'Consolas (code)', css: "Consolas, 'JetBrains Mono', 'Cascadia Mono', monospace", s: .6 }
+};
+const isSimple = (nb) => !!nb && nb.style === 'simple';
+// the font every notebook uses: 'auto' = handwriting in book notebooks and Calibri in simple ones
+function fontKey(nb) {
+  const k = (H().D.settings || {}).noteFont || 'auto';
+  if (k !== 'auto' && FONTS[k]) return k;
+  return isSimple(nb) ? 'calibri' : 'hand';
+}
+function fontVars(nb) {
+  const f = FONTS[fontKey(nb)];
+  return `--nf:${f.css.replace(/"/g, "'")};--s:${f.s}`;
+}
+function fontClass(nb) { return fontKey(nb) === 'hand' ? '' : 'plainfont'; }
+function fontMenuItems(onPick, current, opts = {}) {
+  const items = [];
+  if (opts.auto) items.push({ label: 'Automatic', ic: current === 'auto' ? 'check' : 'dot', hint: 'hand / plain', fn: () => onPick('auto') });
+  if (opts.reset) items.push({ label: 'Page font (remove)', ic: 'x', fn: () => onPick('none') });
+  if (items.length) items.push('-');
+  Object.entries(FONTS).forEach(([k, f]) => items.push({ label: f.name, ic: current === k ? 'check' : 'dot', font: f.css, fn: () => onPick(k) }));
+  return items;
+}
 const URL_RE = /\bhttps?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]]/gi;
 
 const ns = { nbId: null, pgId: null, expanded: {}, query: '', tool: 'type', pen: 'graphite', justToggled: null };
@@ -78,7 +113,7 @@ function createNotebook(opts = {}) {
   const nb = {
     id: nid('nb'), name: opts.name || 'New notebook',
     color: opts.color || NB_COLOURS.find(c => !used.includes(c)) || NB_COLOURS[D().notebooks.length % NB_COLOURS.length],
-    paper: opts.paper || 'lined', kind: opts.kind || 'normal', projectId: opts.projectId || null,
+    paper: opts.paper || 'lined', style: opts.style === 'simple' ? 'simple' : 'book', kind: opts.kind || 'normal', projectId: opts.projectId || null,
     createdAt: now, updatedAt: now, order: now
   };
   D().notebooks.push(nb);
@@ -297,7 +332,7 @@ function renderDesk() {
   const idx = pg ? pages.indexOf(pg) : -1;
   desk.innerHTML = `
     ${deskTopHtml(nb, pg, idx, pages)}
-    <div class="book-area">
+    <div class="book-area ${isSimple(nb) ? 'simple' : ''}">
       <div class="book" style="--nb:${nb.color}">
         <div class="book-cover"></div>
         <div class="spine"></div>
@@ -313,16 +348,18 @@ function renderDesk() {
 
 function pageHtml(nb, pg, idx) {
   const coffee = hash(pg.id) % 7 === 3;
-  return `<article class="page paper-${nb.paper || 'lined'} ${ns.tool !== 'type' ? 'inking tool-' + ns.tool : ''}" id="page" data-pg="${pg.id}">
+  const simple = isSimple(nb);
+  const made = new Date(pg.createdAt);
+  return `<article class="page paper-${simple ? 'plain' : nb.paper || 'lined'} ${fontClass(nb)} ${ns.tool !== 'type' ? 'inking tool-' + ns.tool : ''}" id="page" data-pg="${pg.id}" style="${fontVars(nb)}">
     <button class="ribbon ${pg.bookmarked ? 'on' : ''}" data-act="pg-ribbon" title="${pg.bookmarked ? 'Remove ribbon' : 'Mark this page with a ribbon'}" style="--c:${nb.color}"></button>
     <header class="nhead"><input class="page-title" id="page-title" value="${esc(pg.title || '')}" placeholder="${nb.kind === 'journal' ? '' : 'Page title'}" maxlength="120" autocomplete="off">
-      <span class="page-date">${esc(H().fmtShort(H().dayKey(new Date(pg.createdAt))))}</span></header>
+      <span class="page-date">${simple ? `${esc(made.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }))}<span class="page-time">${esc(made.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }))}</span>` : esc(H().fmtShort(H().dayKey(made)))}</span></header>
     <div class="page-body" id="page-body" contenteditable="${ns.tool === 'type' ? 'true' : 'false'}" spellcheck="true" data-placeholder="Start writing… paste links or pictures, or add a sticky note.">${pg.html || ''}</div>
     <canvas class="ink" id="ink"></canvas>
     <div class="photos" id="photos">${(pg.images || []).map(photoHtml).join('')}</div>
     <svg class="shapes" id="shapes"></svg>
     <div class="stickies" id="stickies">${(pg.stickies || []).map(stickyHtml).join('')}</div>
-    ${coffee ? `<svg class="coffee" viewBox="0 0 120 120" style="--r:${hash(pg.id) % 360}deg"><circle cx="60" cy="60" r="46" fill="none" stroke="#8B5A2B" stroke-width="7" stroke-dasharray="210 18 40 22" opacity=".09"/><circle cx="60" cy="60" r="41" fill="none" stroke="#8B5A2B" stroke-width="1.5" opacity=".07"/><circle cx="64" cy="58" r="39" fill="#8B5A2B" opacity=".025"/></svg>` : ''}
+    ${coffee && !simple ? `<svg class="coffee" viewBox="0 0 120 120" style="--r:${hash(pg.id) % 360}deg"><circle cx="60" cy="60" r="46" fill="none" stroke="#8B5A2B" stroke-width="7" stroke-dasharray="210 18 40 22" opacity=".09"/><circle cx="60" cy="60" r="41" fill="none" stroke="#8B5A2B" stroke-width="1.5" opacity=".07"/><circle cx="64" cy="58" r="39" fill="#8B5A2B" opacity=".025"/></svg>` : ''}
     <footer class="page-num">— ${nb.kind === 'journal' ? esc(H().fmtShort(pg.date || H().today())) : idx + 1} —</footer>
   </article>`;
 }
@@ -350,7 +387,7 @@ function stickyHtml(s) {
 }
 
 function coverHtml(nb) {
-  return `<article class="page cover-page" id="page" style="--nb:${nb.color}">
+  return `<article class="page cover-page ${fontClass(nb)}" id="page" style="--nb:${nb.color};${fontVars(nb)}">
     <div class="cover-band"></div>
     <div class="cover-inner" id="cover-body">${coverBody(nb)}</div>
   </article>`;
@@ -365,7 +402,8 @@ function coverBody(nb) {
     <input class="cover-name" id="nb-name" value="${esc(nb.name)}" maxlength="60" autocomplete="off">
     <div class="cover-grid">
       <div class="field"><label>Cover colour</label><div class="swatches">${NB_COLOURS.map(c => `<button class="swatch ${nb.color === c ? 'on' : ''}" style="--c:${c}" data-act="nb-color" data-v="${c}"></button>`).join('')}</div></div>
-      <div class="field"><label>Paper</label><div class="papers">${PAPERS.map(([v, l]) => `<button class="paper-opt paper-${v} ${nb.paper === v ? 'on' : ''}" data-act="nb-paper" data-v="${v}"><i></i><span>${l}</span></button>`).join('')}</div></div>
+      <div class="field"><label>Style</label><div class="papers">${[['book', 'Book', 'Pages that turn'], ['simple', 'Simple', 'Full width, plain']].map(([v, l, t]) => `<button class="paper-opt style-opt st-${v} ${(nb.style || 'book') === v ? 'on' : ''}" data-act="nb-style" data-v="${v}" title="${t}"><i></i><span>${l}</span></button>`).join('')}</div></div>
+      ${isSimple(nb) ? '' : `<div class="field"><label>Paper</label><div class="papers">${PAPERS.map(([v, l]) => `<button class="paper-opt paper-${v} ${nb.paper === v ? 'on' : ''}" data-act="nb-paper" data-v="${v}"><i></i><span>${l}</span></button>`).join('')}</div></div>`}
       <div class="field"><label>Linked project</label><select class="select" id="nb-project"><option value="">Not linked</option>${projects.map(x => `<option value="${x.id}" ${x.id === nb.projectId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
     </div>
     ${p ? `<div class="cover-section"><h4>${icon('folder', 'sm')} ${esc(p.name)}: open tasks</h4>
@@ -416,7 +454,7 @@ function fitPage() {
   const inkBottom = Math.max(0, ...(pg.strokes || []).flatMap(s => s.pts.map(p => p[1] + 40)));
   const r = document.createRange(); r.selectNodeContents(body);
   const content = body.childNodes.length ? r.getBoundingClientRect().bottom - page.getBoundingClientRect().top : body.offsetTop;
-  const want = Math.max(Math.round(w * 1.32), Math.round(content) + 160, stickBottom, inkBottom);
+  const want = Math.max(isSimple(curNb()) ? Math.round(innerHeight * .78) : Math.round(w * 1.32), Math.round(content) + 160, stickBottom, inkBottom);
   if (Math.abs(page.offsetHeight - want) > 2) page.style.minHeight = want + 'px';
   if (pg.w !== w || !$('#shapes').dataset.r) renderShapes();
   pg.w = w; pg.h = page.offsetHeight;
@@ -514,7 +552,8 @@ function turnTo(nbId, pgId, dir) {
   processActions(curPg());
   hideSelbar(); closeMenu();
   const oldPage = $('#page');
-  const oldSnap = oldPage && !REDUCED ? snapshot(oldPage) : null;
+  const plainSwap = isSimple(curNb()) || isSimple(getNb(nbId));
+  const oldSnap = oldPage && !REDUCED && !plainSwap ? snapshot(oldPage) : null;
   const oldH = oldPage ? oldPage.offsetHeight : 0;
   if (dir == null) {
     if (nbId === ns.nbId) {
@@ -531,6 +570,7 @@ function turnTo(nbId, pgId, dir) {
   const desk = $('#desk'); if (desk) desk.scrollTo({ top: 0 });
   renderShelf();
   renderDesk();
+  if (plainSwap && !REDUCED) { const np = $('#page'); np && np.animate([{ opacity: 0, transform: `translateX(${dir > 0 ? 14 : -14}px)` }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'cubic-bezier(.2,.7,.2,1)' }); return; }
   if (!oldSnap) return;
   window.Sound && Sound.play('page');
   const wrap = $('#page-wrap'), newPage = $('#page');
@@ -837,6 +877,8 @@ function topBlock(node) {
   return b && b !== body ? b : null;
 }
 const LINE = 34;
+// the real line height (simple notebooks and plain fonts use tighter lines than the lined paper)
+function lineH() { const b = $('#page-body'); return (b && parseFloat(getComputedStyle(b).lineHeight)) || LINE; }
 function emptyLine() { const d = document.createElement('div'); d.appendChild(document.createElement('br')); return d; }
 /** Add a picture to the page. With `at` (a drop point) it lands there; otherwise it's taped in at the
  *  caret and the text below makes room for it. */
@@ -857,7 +899,7 @@ async function addPicture(src, at) {
     const hasText = !!blk.textContent.trim() || !!blk.querySelector('img,.nlink');
     const br = blk.getBoundingClientRect();
     x = 96; y = (hasText ? br.bottom : br.top) - pr.top + 8;
-    const lines = Math.ceil((h + 20) / LINE) - (hasText ? 0 : 1);
+    const lines = Math.ceil((h + 20) / lineH()) - (hasText ? 0 : 1);
     let last = blk;
     for (let i = 0; i < lines; i++) { const d = emptyLine(); last.after(d); last = d; }
     const caretLine = emptyLine(); last.after(caretLine);
@@ -904,7 +946,7 @@ function migrateInlinePhotos() {
   }));
   plan.forEach(({ ph, r }) => {
     const frag = document.createDocumentFragment();
-    for (let i = 0; i < Math.max(1, Math.round(r.height / LINE)); i++) frag.appendChild(document.createElement('br'));
+    for (let i = 0; i < Math.max(1, Math.round(r.height / lineH())); i++) frag.appendChild(document.createElement('br'));
     ph.replaceWith(frag);
   });
   pg.html = cleanHtml(body.innerHTML);
@@ -996,8 +1038,9 @@ document.addEventListener('mousedown', (e) => {
   if (body.childNodes.length) { const r = document.createRange(); r.selectNodeContents(body); bottom = Math.max(top, r.getBoundingClientRect().bottom); }
   if (e.clientY <= bottom + 4) return; // on or beside existing writing: the normal caret is right
   e.preventDefault();
-  const want = Math.floor((e.clientY - top) / LINE) + 1;
-  const have = body.childNodes.length ? Math.round((bottom - top) / LINE) : 0;
+  const L = lineH();
+  const want = Math.floor((e.clientY - top) / L) + 1;
+  const have = body.childNodes.length ? Math.round((bottom - top) / L) : 0;
   if (!body.textContent.trim() && !body.querySelector('ul,ol,.nlink')) body.innerHTML = '';
   let last = null;
   for (let i = 0; i < Math.max(1, want - (body.childNodes.length ? have : 0)); i++) { last = emptyLine(); body.appendChild(last); }
@@ -1105,6 +1148,25 @@ function removeSticky(el, withUndo = true) {
   el.animate([{ opacity: 1, transform: `rotate(${s.rot}deg)` }, { opacity: 0, transform: `translateY(40px) rotate(${s.rot + 12}deg) scale(.9)` }], { duration: 300, easing: 'ease-in' }).finished.then(go);
 }
 
+// wrap the selected text in a font; nested font spans inside are removed so the newest choice wins
+function applyFont(range, k) {
+  const body = $('#page-body'); if (!body || !body.contains(range.commonAncestorContainer)) return;
+  const span = document.createElement('span'); span.className = 'ff-' + k;
+  span.appendChild(range.extractContents());
+  $$('[class*="ff-"]', span).forEach(x => { while (x.firstChild) x.parentNode.insertBefore(x.firstChild, x); x.remove(); });
+  range.insertNode(span);
+  // a whole font span replaced with "page font" just unwraps
+  if (k === 'none' && !(span.parentElement && span.parentElement.closest('[class*="ff-"]'))) {
+    while (span.firstChild) span.parentNode.insertBefore(span.firstChild, span); span.remove();
+  } else {
+    const sel = getSelection(); sel.removeAllRanges(); const nr = document.createRange(); nr.selectNodeContents(span); sel.addRange(nr);
+  }
+  // drop empty leftovers
+  $$('[class*="ff-"]', body).forEach(x => { if (!x.textContent && !x.querySelector('img,br')) x.remove(); });
+  hideSelbar();
+  bodyChanged(); commitEditor();
+  window.Sound && Sound.play('tick');
+}
 // ------------------------------------------------------------------ selection → task toolbar
 let selbar = null;
 function hideSelbar() { if (selbar) { selbar.remove(); selbar = null; } }
@@ -1122,7 +1184,8 @@ document.addEventListener('selectionchange', () => {
   selbar.innerHTML = `<span class="lbl">${icon('check', 'sm')} Make a task</span>
     <button data-sb="today">${icon('sun', 'sm')}Today</button><button data-sb="tomorrow">Tomorrow</button>
     ${p ? `<button data-sb="project" title="Add to ${esc(p.name)} backlog">${icon('folder', 'sm')}${esc(p.name.length > 16 ? p.name.slice(0, 15) + '…' : p.name)}</button>` : ''}
-    <span class="sep"></span><button data-sb="mark" title="Highlight">${icon('highlighter', 'sm')}</button>`;
+    <span class="sep"></span><button data-sb="mark" title="Highlight">${icon('highlighter', 'sm')}</button>
+    <button data-sb="font" title="Change the font of this text">${icon('font', 'sm')}Font</button>`;
   const w = selbar.offsetWidth;
   selbar.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2)) + 'px';
   selbar.style.top = Math.max(8, r.top - 46) + 'px';
@@ -1140,6 +1203,15 @@ document.addEventListener('mousedown', (e) => {
     catch (err) { el.appendChild(range.extractContents()); range.insertNode(el); }
     sel.removeAllRanges();
   };
+  if (b.dataset.sb === 'font') {
+    // keep the selection while the font list is open
+    const keepRange = range.cloneRange();
+    const r = b.getBoundingClientRect();
+    const cur = (() => { let n = range.commonAncestorContainer; n = n.nodeType === 1 ? n : n.parentElement; const f = n.closest('[class*="ff-"]'); return f ? (f.className.match(/ff-(\w+)/) || [])[1] : null; })();
+    const m = ctxMenu([{ header: 'Font for this text' }, ...fontMenuItems((k) => applyFont(keepRange, k), cur, { reset: true })], r.left, r.bottom + 6);
+    m.addEventListener('mousedown', (ev) => ev.preventDefault());
+    return;
+  }
   if (b.dataset.sb === 'mark') {
     const m = document.createElement('mark'); m.className = 'hl'; wrap(m);
   } else {
@@ -1192,6 +1264,11 @@ function openMenu(btn, kind) {
   const pg = curPg(), nb = curNb();
   const customs = D().noteTemplates || [];
   if (kind === 'tools') { const r = btn.getBoundingClientRect(); ctxMenu(toolsMenuItems(), r.left, r.bottom + 6); return; }
+  if (kind === 'font') {
+    const r = btn.getBoundingClientRect();
+    ctxMenu([{ header: 'Font for all notebooks' }, ...fontMenuItems(setNoteFont, H().D.settings.noteFont || 'auto', { auto: true })], r.left, r.bottom + 6);
+    return;
+  }
   if (kind === 'more') {
     const r = btn.getBoundingClientRect();
     const extra = [
@@ -1228,6 +1305,33 @@ function openMenu(btn, kind) {
 }
 
 // ------------------------------------------------------------------ tools
+function setNoteFont(k) {
+  H().D.settings.noteFont = k; H().save();
+  commitEditor();
+  const keep = $('#desk') ? $('#desk').scrollTop : 0;
+  renderDesk(); if ($('#desk')) $('#desk').scrollTop = keep;
+  H().toast(k === 'auto' ? 'Automatic font: handwriting in books, Calibri in simple notebooks' : `All notebooks now use ${FONTS[k].name}`, { ic: 'font' });
+}
+// new notebook: book (turning pages) or simple (full width, plain, OneNote-style)
+function chooseNotebookStyle() {
+  return new Promise((res) => {
+    const wrap = document.createElement('div'); wrap.className = 'prompt-wrap';
+    wrap.innerHTML = `<div class="scrim"></div><div class="modal prompt-modal nbstyle-modal" role="dialog">
+      <div class="modal-head"><h2>New notebook</h2><p>Pick a style. You can change it later on the inside cover.</p></div>
+      <div class="modal-body nbs-grid">
+        <button class="nbs-card" data-nbs="book"><span class="nbs-prev book"><i class="sp"></i><b>Notes</b><em></em><em></em><em class="s"></em></span>
+          <span class="nbs-name">Book</span><span class="nbs-sub">Pages that turn, handwriting, lined paper, stickies and doodles.</span></button>
+        <button class="nbs-card" data-nbs="simple"><span class="nbs-prev simple"><b>Notes</b><u></u><small>28 October 2026 &nbsp;09:41</small><em></em><em></em><em class="s"></em></span>
+          <span class="nbs-name">Simple</span><span class="nbs-sub">Full width with a plain font, like OneNote. Quick to scan and great for commands and procedures.</span></button>
+      </div>
+      <div class="modal-foot"><button class="btn ghost" data-nbs="">Cancel</button></div></div>`;
+    document.body.appendChild(wrap);
+    setTimeout(() => wrap.querySelector('.nbs-card').focus(), 40);
+    const done = (v) => { wrap.querySelector('.modal').classList.add('out'); wrap.querySelector('.scrim').classList.add('out'); setTimeout(() => wrap.remove(), 260); res(v); };
+    wrap.addEventListener('click', (e) => { const b = e.target.closest('[data-nbs]'); if (b) done(b.dataset.nbs || null); else if (e.target.classList.contains('scrim')) done(null); });
+    wrap.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Escape') done(null); });
+  });
+}
 function setTool(t) {
   ns.tool = t;
   persist();
@@ -1273,6 +1377,7 @@ function deskTopHtml(nb, pg, idx, pages) {
         ${tool === 'pencil' ? `<div class="pens">${Object.keys(PENS).map(k => `<button class="pen ${ns.pen === k ? 'on' : ''}" style="--c:${PENS[k]}" data-act="pen" data-v="${k}" title="${k}"></button>`).join('')}</div>` : ''}
         ${tool === 'shape' ? `<span class="shape-hint">${icon(SHAPES[ns.shape]?.ic || 'shapes', 'sm')} Drag on the page to draw a ${esc((SHAPES[ns.shape] || {}).name || 'shape').toLowerCase()} <button class="link" data-act="tool" data-v="type">Done</button></span>` : ''}
         ${tool !== 'type' && tool !== 'shape' ? `<button class="icon-btn" data-act="ink-undo" title="Undo last stroke">${icon('undo', 'sm')}</button>` : ''}` : ''}
+        <button class="btn sm font-btn" data-act="menu" data-menu="font" title="Font for all notebooks">${icon('font', 'sm')}<span>${esc((H().D.settings.noteFont || 'auto') === 'auto' ? 'Font: auto' : FONTS[fontKey(nb)].name.replace(/ \(.*\)/, ''))}</span>${icon('chevron', 'sm')}</button>
         <button class="icon-btn" data-act="room" title="More room: hide the menus (again to bring them back)">${icon(H().D.settings.navCollapsed && ns.shelfHidden ? 'collapse' : 'expand', 'sm')}</button>
         <button class="icon-btn" data-act="menu" data-menu="more" title="More">${icon('dots', 'sm')}</button>
       </div>
@@ -1294,7 +1399,7 @@ function printHtml(nb, pages, title) {
   const sheets = pages.map((pg, i) => {
     const h = Math.max(980, pg.h || 980);
     const body = (pg.html || '').replace(/<span class="photo-tools">[\s\S]*?<\/span>\s*<\/span>/g, '</span>');
-    return `<article class="page paper-${nb.paper || 'lined'} print-page" style="width:${W}px;min-height:${h}px">
+    return `<article class="page paper-${isSimple(nb) ? 'plain' : nb.paper || 'lined'} ${fontClass(nb)} print-page" style="width:${W}px;min-height:${h}px;${fontVars(nb)}">
       <header class="nhead"><div class="page-title">${esc(pg.title || pageLabel(pg, i))}</div><span class="page-date">${esc(H().fmtShort(H().dayKey(new Date(pg.createdAt))))}</span></header>
       <div class="page-body">${body}</div>
       ${inkImage(pg, W, h)}
@@ -1421,15 +1526,22 @@ const actions = {
   },
   'go-cover': () => { closeMenu(); turnTo(ns.nbId, null, -1); },
   'journal-today': () => { closeMenu(); const pg = journalPage(H().today()); H().save(); turnTo(pg.notebookId, pg.id); },
-  'nb-new': () => {
+  'nb-new': async () => {
     closeMenu();
-    const nb = createNotebook();
+    const style = await chooseNotebookStyle(); if (!style) return;
+    const nb = createNotebook({ style });
     H().save();
     ns.expanded[nb.id] = true; ns.justToggled = nb.id;
     turnTo(nb.id, null, 1);
     setTimeout(() => { const i = $('#nb-name'); if (i) { i.focus(); i.select(); } }, 950);
   },
   'nb-color': (el) => { const nb = curNb(); nb.color = el.dataset.v; H().save(); const keep = $('#desk').scrollTop; renderDesk(); $('#desk').scrollTop = keep; renderShelf(); },
+  'nb-style': (el) => {
+    const nb = curNb(); if ((nb.style || 'book') === el.dataset.v) return;
+    nb.style = el.dataset.v; H().save();
+    const keep = $('#desk').scrollTop; renderDesk(); $('#desk').scrollTop = keep;
+    H().toast(nb.style === 'simple' ? 'Simple notebook: full width, plain font' : 'Back to a book with turning pages', { ic: 'book' });
+  },
   'nb-paper': (el) => { const nb = curNb(); nb.paper = el.dataset.v; H().save(); renderCoverBody(); },
   'nb-delete': () => {
     deleteNotebook(curNb().id); return;
@@ -1891,7 +2003,7 @@ function ctxMenu(items, x, y, opts = {}) {
     const b = document.createElement('button');
     b.className = (it.danger ? 'danger ' : '') + (it.sub ? 'has-sub' : '');
     b.disabled = !!it.disabled;
-    b.innerHTML = `${icon(it.ic || 'dot', 'sm')}<span class="mi">${esc(it.label)}</span>${it.sub ? `<span class="sub-arrow">${icon('chevronR', 'sm')}</span>` : it.hint ? `<kbd>${esc(it.hint)}</kbd>` : ''}`;
+    b.innerHTML = `${icon(it.ic || 'dot', 'sm')}<span class="mi"${it.font ? ` style="font-family:${esc(it.font)}"` : ''}>${esc(it.label)}</span>${it.sub ? `<span class="sub-arrow">${icon('chevronR', 'sm')}</span>` : it.hint ? `<kbd>${esc(it.hint)}</kbd>` : ''}`;
     if (it.sub) {
       const openSub = () => {
         $$('.menu.ctx').forEach(x => x.classList.remove('sub-open-from'));

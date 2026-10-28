@@ -31,7 +31,7 @@ function defaultData() {
       wrapTime: '17:00', focusMinutes: 25, launchAtStartup: true, closeToTray: true,
       staleProjectDays: 7, hotkey: 'CommandOrControl+Alt+Space', theme: 'light',
       nav: { hidden: [], order: [] },
-      season: 'auto', seasonFx: false, fxDefaultV2: true, customSounds: [], soundSources: {},
+      season: 'auto', seasonFx: false, noteFont: 'auto', fxDefaultV2: true, customSounds: [], soundSources: {},
       sounds: true, volume: 0.6,
       ambient: 'rain', ambientAuto: true, ambientVolume: 0.5, focusShield: true, dnd: true,
       waterOn: true, waterEvery: 90, waterGoal: 8, postureOn: true, postureEvery: 45,

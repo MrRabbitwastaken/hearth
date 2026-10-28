@@ -69,6 +69,7 @@ window.ICONS = {
   music: '<path d="M9 17.5V5l11-2v12.5"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="17.5" cy="15.5" r="2.5"/>',
   globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.6 2.6 14.4 0 17M12 3.5c-2.6 2.6-2.6 14.4 0 17"/>',
   sidebar: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9 4.5v15"/><path d="M14.5 10l-2 2 2 2"/>',
+  font: '<path d="M4 19l5.5-14h1L16 19"/><path d="M6.2 13.5h7.1"/><path d="M16.5 11.5c.6-.9 1.5-1.3 2.5-1.3 1.6 0 2.5.9 2.5 2.6V19"/><path d="M21.5 15.3c-3.6 0-5.3.8-5.3 2.2 0 1 .8 1.7 2 1.7 1.8 0 3.3-1.3 3.3-3.3"/>',
   dot: '<circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/>',
   book: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5"/><path d="M8.5 7.5h7"/>',
   sticky: '<path d="M5 4h14a1 1 0 0 1 1 1v9l-6 6H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path d="M14 20v-5a1 1 0 0 1 1-1h5"/>',

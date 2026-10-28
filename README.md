@@ -11,11 +11,11 @@ Grab the latest files from the **Releases** page on GitHub. Every push to `main`
 
 ### Building it yourself
 
-**Make the installer once:** double-click **`Make-Installer.bat`**. You don't need to install anything first. If Node.js isn't on the PC, the script downloads a private copy into a `.tools` folder, used only for building. After a few minutes it opens `dist\` with **`Hearth-Setup-1.3.0.exe`**.
+**Make the installer once:** double-click **`Make-Installer.bat`**. You don't need to install anything first. If Node.js isn't on the PC, the script downloads a private copy into a `.tools` folder, used only for building. After a few minutes it opens `dist\` with **`Hearth-Setup-1.4.0.exe`**.
 
-**Install:** double-click `Hearth-Setup-1.3.0.exe`. A setup wizard lets you choose just-me or all users and the install folder. It creates Start menu and desktop shortcuts, launches Hearth when it finishes, and adds an uninstaller in Windows *Apps*.
+**Install:** double-click `Hearth-Setup-1.4.0.exe`. A setup wizard lets you choose just-me or all users and the install folder. It creates Start menu and desktop shortcuts, launches Hearth when it finishes, and adds an uninstaller in Windows *Apps*.
 
-- **Silent install** (e.g. NinjaOne): `Hearth-Setup-1.3.0.exe /S`. Add `/allusers` for a machine-wide install.
+- **Silent install** (e.g. NinjaOne): `Hearth-Setup-1.4.0.exe /S`. Add `/allusers` for a machine-wide install.
 - The installer isn't code-signed, so Windows SmartScreen may say "Windows protected your PC" the first time. Click **More info → Run anyway**. Silent installs aren't affected.
 - Optional: if this folder is pushed to GitHub, `.github/workflows/build-installer.yml` builds the installer automatically on every push.
 - `run-dev.bat` runs Hearth straight from the source folder, for trying changes.
@@ -46,6 +46,8 @@ Your data is kept when you install a newer version over the top.
 - A *good-day score* (tasks, focus, breaks and water) with a streak. Weekends don't break the streak.
 
 **Notebooks**: pages that turn (click any line on a page to start writing there), pencil handwriting, sticky notes you can drag about, pencil and highlighter, pasted images and links, highlight text → task, ribbons, journal, search and PDF export.
+- **Book or Simple**: a new notebook asks which style you want. *Book* has pages that turn, handwriting and lined paper. *Simple* is full width with a plain font (Calibri) and the page date and time under the title, like OneNote. You can switch on the inside cover.
+- **Fonts**: the **Font** button in the notebook toolbar changes the font across every notebook. *Automatic* means handwriting in books and Calibri in simple notebooks. Highlight some text and click **Font** to give just that text its own font, which is handy for PowerShell lines in Consolas.
 - **Templates**: meeting, 1:1, incident report, change request, project kick-off, stand-up and checklist. You can also save any page as your own template.
 - **Pictures** are taped onto the page. Drag them anywhere, pull the corner to resize, double-click to view full size.
 - **Organise the shelf**: right-click a page for Rename, Duplicate, Move up/down, Add to chapter / New chapter…, Move to notebook, Ribbon, Save as template, Export, and Delete. Chapters work like sub-folders: they collapse, and you can right-click one to rename, add a page, reorder or remove it. You can also drag pages around the shelf, into chapters or into other notebooks. Right-click a notebook to rename it, add pages or chapters, export or delete.
