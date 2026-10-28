@@ -11,11 +11,11 @@ Grab the latest files from the **Releases** page on GitHub. Every push to `main`
 
 ### Building it yourself
 
-**Make the installer once:** double-click **`Make-Installer.bat`**. You don't need to install anything first. If Node.js isn't on the PC, the script downloads a private copy into a `.tools` folder, used only for building. After a few minutes it opens `dist\` with **`Hearth-Setup-1.5.1.exe`**.
+**Make the installer once:** double-click **`Make-Installer.bat`**. You don't need to install anything first. If Node.js isn't on the PC, the script downloads a private copy into a `.tools` folder, used only for building. After a few minutes it opens `dist\` with **`Hearth-Setup-1.6.0.exe`**.
 
-**Install:** double-click `Hearth-Setup-1.5.1.exe`. A setup wizard lets you choose just-me or all users and the install folder. It creates Start menu and desktop shortcuts, launches Hearth when it finishes, and adds an uninstaller in Windows *Apps*.
+**Install:** double-click `Hearth-Setup-1.6.0.exe`. A setup wizard lets you choose just-me or all users and the install folder. It creates Start menu and desktop shortcuts, launches Hearth when it finishes, and adds an uninstaller in Windows *Apps*.
 
-- **Silent install** (e.g. NinjaOne): `Hearth-Setup-1.5.1.exe /S`. Add `/allusers` for a machine-wide install.
+- **Silent install** (e.g. NinjaOne): `Hearth-Setup-1.6.0.exe /S`. Add `/allusers` for a machine-wide install.
 - The installer isn't code-signed, so Windows SmartScreen may say "Windows protected your PC" the first time. Click **More info → Run anyway**. Silent installs aren't affected.
 - Optional: if this folder is pushed to GitHub, `.github/workflows/build-installer.yml` builds the installer automatically on every push.
 - `run-dev.bat` runs Hearth straight from the source folder, for trying changes.
@@ -62,6 +62,7 @@ Your data is kept when you install a newer version over the top.
 **Plus**: Waiting on, snippets & links, a weekly review with a copyable summary, morning brief, end-of-day wrap-up, and quick capture with **Ctrl+Alt+Space** (Tab switches between task and sticky note).
 
 **Make it yours (Settings)**:
+- **Spell check** (on by default, English UK): misspelt words get a red squiggle in notes, stickies, tasks and project notes. Right-click one for suggestions or *Add to dictionary*. Right-click in any text box also gives Cut, Copy, Paste and Select all. Switch it off or change the dictionary (UK, US, Australia, Canada) under *You & appearance*.
 - **Today widgets**: right-click any card down the side of Today (Water, Good-day score, Focus, Projects…) and choose *Hide*. Bring cards back under Settings → *Today widgets*.
 - Show, hide or reorder sidebar pages, or shrink the sidebar to icons only.
 - Daylight or Evening theme.

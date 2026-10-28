@@ -31,7 +31,7 @@ function defaultData() {
       wrapTime: '17:00', focusMinutes: 25, launchAtStartup: true, closeToTray: true,
       staleProjectDays: 7, hotkey: 'CommandOrControl+Alt+Space', theme: 'light',
       nav: { hidden: [], order: [] },
-      season: 'auto', seasonFx: false, noteFont: 'auto', hiddenWidgets: [], fxDefaultV2: true, customSounds: [], soundSources: {},
+      season: 'auto', seasonFx: false, noteFont: 'auto', hiddenWidgets: [], spellcheck: true, spellLang: 'en-GB', fxDefaultV2: true, customSounds: [], soundSources: {},
       sounds: true, volume: 0.6,
       ambient: 'rain', ambientAuto: true, ambientVolume: 0.5, focusShield: true, dnd: true,
       waterOn: true, waterEvery: 90, waterGoal: 8, postureOn: true, postureEvery: 45,
@@ -1130,7 +1130,9 @@ function viewSettings() {
           <div class="seg">${[['light', 'Daylight'], ['dark', 'Evening'], ['system', 'Match Windows']].map(([v, l]) => `<button data-act="set-theme" data-v="${v}" class="${s.theme === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
         <div class="set-row"><div class="t"><b>Season</b><span>Seasonal colours. "Auto" follows the calendar (it's ${seasonNow} now).</span></div>
           ${seg('season', [['off', 'Off'], ['auto', 'Auto'], ['autumn', 'Autumn'], ['winter', 'Winter'], ['spring', 'Spring'], ['summer', 'Summer']], 'set-season')}</div>
-        <div class="set-row"><div class="t"><b>Seasonal decorations</b><span>A few leaves, snowflakes, petals or sun motes drifting gently past.</span></div>${sw('seasonFx')}</div></div>
+        <div class="set-row"><div class="t"><b>Seasonal decorations</b><span>A few leaves, snowflakes, petals or sun motes drifting gently past.</span></div>${sw('seasonFx')}</div>
+        <div class="set-row"><div class="t"><b>Spell check</b><span>Underlines misspelt words in notes, tasks and stickies. Right-click one for suggestions.</span></div>${sw('spellcheck')}</div>
+        <div class="set-row sub-row"><div class="t"><b>Dictionary</b></div><select class="select" data-set="spellLang" style="width:190px">${[['en-GB', 'English (UK)'], ['en-US', 'English (US)'], ['en-AU', 'English (Australia)'], ['en-CA', 'English (Canada)']].map(([v, l]) => `<option value="${v}" ${s.spellLang === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
 
       <div class="card"><h3>${icon('sliders', 'sm')} Menu</h3>
         <div class="set-row" style="border-top:0;padding-top:0"><div class="t"><b>Compact menu</b><span>Shrink the sidebar to icons only (Ctrl+\\). Hover an icon to see its name.</span></div>${sw('navCollapsed')}</div>
@@ -1816,6 +1818,7 @@ const ACTIONS = {
   'set-toggle': (el) => {
     const k = el.dataset.v; D.settings[k] = !D.settings[k]; el.classList.toggle('on', D.settings[k]); save();
     if (k === 'seasonFx') applyTheme();
+    if (k === 'spellcheck') { api.spellApply && api.spellApply({ spellcheck: D.settings.spellcheck, spellLang: D.settings.spellLang }); toast(D.settings.spellcheck ? 'Spell check on' : 'Spell check off', { ic: 'check' }); }
     if (k === 'navCollapsed') { D.settings.navCollapsed = !D.settings.navCollapsed; toggleNav(); return; }
     if (k === 'sounds') { Sound.applyVolumes(); buildSidebar(); updateSidebar(); }
     if (k === 'smartAdd' || k === 'waterOn') refresh();
@@ -1942,6 +1945,7 @@ document.addEventListener('input', (e) => {
     D.settings[t.dataset.set] = v;
     save();
     if (t.dataset.set === 'volume' || t.dataset.set === 'ambientVolume') { Sound.applyVolumes(); return; }
+    if (t.dataset.set === 'spellLang') { api.spellApply && api.spellApply({ spellcheck: D.settings.spellcheck, spellLang: v }); return; }
     if (t.dataset.set === 'dayStart' || t.dataset.set === 'dayEnd') return;
     if (t.dataset.set === 'name' && state.view === 'today') return;
     updateLive();
@@ -1974,6 +1978,28 @@ document.addEventListener('contextmenu', (e) => {
   e.preventDefault();
   soundMenu(b.dataset.v, e.clientX, e.clientY);
 });
+
+// ================================================================== SPELLING / EDIT MENU
+// right-click in any text box: spelling suggestions (when the word is underlined) plus cut, copy and paste
+function spellMenu(p) {
+  if (!window.Notes || !window.Notes.ctxMenu) return;
+  const items = [];
+  if (p.word) {
+    items.push({ header: `“${p.word}”` });
+    if (p.suggestions && p.suggestions.length) p.suggestions.forEach(w => items.push({ label: w, ic: 'spell', fn: () => api.spellReplace(w) }));
+    else items.push({ label: 'No suggestions', ic: 'dot', disabled: true });
+    items.push({ label: 'Add to dictionary', ic: 'plus', fn: () => { api.spellAdd(p.word).then(ok => ok && toast(`"${p.word}" added to your dictionary`, { ic: 'check' })); } });
+    items.push('-');
+  }
+  items.push({ label: 'Cut', ic: 'cut', hint: 'Ctrl+X', disabled: !p.canCut, fn: () => api.spellEdit('cut') });
+  items.push({ label: 'Copy', ic: 'copy', hint: 'Ctrl+C', disabled: !p.canCopy, fn: () => api.spellEdit('copy') });
+  items.push({ label: 'Paste', ic: 'paste', hint: 'Ctrl+V', disabled: !p.canPaste, fn: () => api.spellEdit('paste') });
+  items.push({ label: 'Select all', ic: 'dot', hint: 'Ctrl+A', fn: () => api.spellEdit('selectAll') });
+  const m = window.Notes.ctxMenu(items, p.x, p.y);
+  // keep the text box focused (and its selection) while the menu is open
+  m && m.addEventListener('mousedown', (e) => e.preventDefault());
+  m && m.classList.add('spell-menu');
+}
 
 // ================================================================== DAY / WRAP WATCHERS
 function maybeMorning() {
@@ -2103,6 +2129,7 @@ window.H = {
   newTask, T, P, touchProject, addTask, toggleTask, openModal, closeModal, closeModalInstant: () => closeModalInstant(), go, animateOut,
   updateSidebar, REDUCED, EASE, IS_CAPTURE,
   ruleMatches, describeRule, taskRow, flipRender, refreshQuiet, startFocus, renderView,
+  spellMenu: (p) => spellMenu(p),
   setNav: (v) => { if (!!D.settings.navCollapsed !== !!v) toggleNav(); },
   renderModalBody: () => renderModal(false)
 };
@@ -2127,6 +2154,7 @@ async function boot() {
     setBreakStatus(s);
     if (!s.due && state.breakOpen && s.reason === 'back') closeBreak();
   });
+  if (api.onSpellMenu) api.onSpellMenu(spellMenu);
   if (api.onStreamState) api.onStreamState(() => setTimeout(() => { if (state.view === 'today') refreshQuiet(); }, 50));
   api.onBreakDue((s) => {
     setBreakStatus(s);

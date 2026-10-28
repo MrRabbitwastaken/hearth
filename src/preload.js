@@ -39,6 +39,12 @@ contextBridge.exposeInMainWorld('hearth', {
   streamVolume: (v) => ipcRenderer.invoke('sound:volume', v),
   onStreamState: on('sound:stream'),
   pickVideo: () => ipcRenderer.invoke('notes:pickVideo'),
+  onSpellMenu: on('spell:menu'),
+  spellReplace: (w) => ipcRenderer.invoke('spell:replace', w),
+  spellAdd: (w) => ipcRenderer.invoke('spell:add', w),
+  spellEdit: (cmd) => ipcRenderer.invoke('spell:edit', cmd),
+  spellApply: (o) => ipcRenderer.invoke('spell:apply', o),
+  spellLangs: () => ipcRenderer.invoke('spell:langs'),
   exportData: () => ipcRenderer.invoke('app:export'),
   importData: () => ipcRenderer.invoke('app:import')
 });

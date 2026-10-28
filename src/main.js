@@ -276,6 +276,7 @@ function createMainWindow() {
     }
   });
   mainWindow.removeMenu();
+  hookSpellMenu(mainWindow);
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   mainWindow.once('ready-to-show', () => {
     const hidden = process.argv.includes('--hidden');
@@ -319,6 +320,7 @@ function openCapture() {
       nodeIntegration: false
     }
   });
+  hookSpellMenu(captureWindow);
   captureWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'), { hash: 'capture' });
   captureWindow.once('ready-to-show', () => { captureWindow.show(); captureWindow.focus(); });
   captureWindow.on('blur', () => { if (captureWindow && !captureWindow.isDestroyed()) captureWindow.close(); });
@@ -637,6 +639,49 @@ app.setAppUserModelId(APP_ID);
 
 app.on('second-instance', () => showMain());
 
+// ------------------------------------------------------------------ spell checking
+// Chromium's checker underlines mistakes; right-clicking sends the suggestions to the window,
+// which shows them in Hearth's own menu.
+const SPELL_LANGS = { 'en-GB': 'English (UK)', 'en-US': 'English (US)', 'en-AU': 'English (Australia)', 'en-CA': 'English (Canada)' };
+function applySpelling(over) {
+  try {
+    const ses = session.defaultSession;
+    const s = { ...((data && data.settings) || {}), ...(over || {}) };
+    const on = s.spellcheck !== false;
+    ses.setSpellCheckerEnabled(on);
+    const avail = ses.availableSpellCheckerLanguages || [];
+    const want = s.spellLang || 'en-GB';
+    const lang = avail.includes(want) ? want : avail.includes('en-GB') ? 'en-GB' : avail.find(l => l.startsWith('en')) || null;
+    if (lang && on) ses.setSpellCheckerLanguages([lang]);
+  } catch (e) { /* spell checking is a nice-to-have */ }
+}
+function hookSpellMenu(win) {
+  win.webContents.on('context-menu', (e, p) => {
+    if (!p.isEditable) return;
+    win.webContents.send('spell:menu', {
+      word: p.misspelledWord || '', suggestions: (p.dictionarySuggestions || []).slice(0, 6),
+      x: p.x, y: p.y, hasSelection: !!(p.selectionText || '').trim(),
+      canCut: !!p.editFlags.canCut, canCopy: !!p.editFlags.canCopy, canPaste: !!p.editFlags.canPaste
+    });
+  });
+}
+ipcMain.handle('spell:replace', (e, word) => { if (typeof word === 'string' && word.length < 200) e.sender.replaceMisspelling(word); });
+ipcMain.handle('spell:add', (e, word) => {
+  if (typeof word !== 'string' || !word.trim() || word.length > 80) return false;
+  try { session.defaultSession.addWordToSpellCheckerDictionary(word.trim()); } catch (err) { return false; }
+  // re-check the page so the underline goes straight away
+  e.sender.replaceMisspelling(word);
+  return true;
+});
+ipcMain.handle('spell:edit', (e, cmd) => { if (['cut', 'copy', 'paste', 'selectAll', 'pasteAndMatchStyle'].includes(cmd)) e.sender[cmd](); });
+ipcMain.handle('spell:apply', (e, o) => { applySpelling(o && typeof o === 'object' ? { spellcheck: o.spellcheck !== false, spellLang: String(o.spellLang || 'en-GB') } : null); return true; });
+ipcMain.handle('spell:langs', () => {
+  let avail = [];
+  try { avail = session.defaultSession.availableSpellCheckerLanguages || []; } catch (e) {}
+  const list = Object.keys(SPELL_LANGS).filter(l => !avail.length || avail.includes(l)).map(id => ({ id, name: SPELL_LANGS[id] }));
+  return list;
+});
+
 app.whenReady().then(() => {
   protocol.handle('hearth', (req) => {
     const u = new URL(req.url);
@@ -655,6 +700,7 @@ app.whenReady().then(() => {
   session.fromPartition('persist:hearth-sound').webRequest.onBeforeSendHeaders(yt, addReferrer);
   restoreDndSync(); // in case Hearth was closed mid-focus
   loadData();
+  applySpelling();
   createMainWindow();
   createTray();
   registerHotkey();

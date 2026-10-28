@@ -382,3 +382,6 @@ html.nav-collapsed .clock-widget .meta, html.nav-collapsed .clock-widget .mini-b
 .pb-notes .label-sm { display: inline-flex; align-items: center; gap: 6px; }
 .pb-notes-box { min-height: 74px; resize: vertical; line-height: 1.5; background: var(--bg); font-size: 13.5px; overflow: hidden; }
 .pb-notes-box:focus { background: var(--surface); }
+
+/* spelling suggestions sit first in the right-click menu */
+.spell-menu .menu-label { text-transform: none; letter-spacing: 0; font-size: 12.5px; color: var(--clay, #B5583A); text-decoration: underline wavy color-mix(in srgb, #D04A3A 70%, transparent); text-underline-offset: 3px; }
