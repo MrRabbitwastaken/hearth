@@ -6,6 +6,7 @@ const {
   powerMonitor, shell, nativeImage, clipboard, dialog, screen, protocol, net, session
 } = require('electron');
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { execFile, execFileSync } = require('child_process');
@@ -30,7 +31,23 @@ if (PORTABLE) {
 
 // pictures are referenced as hearth://img/<file>, so they still work when the drive letter changes
 protocol.registerSchemesAsPrivileged([{ scheme: 'hearth', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
-const imagesDir = () => path.join(app.getPath('userData'), 'images');
+// ---------- where the data lives ----------
+// Normally the Windows profile (%APPDATA%\Hearth). Settings → Your data can point it at any folder,
+// e.g. OneDrive, which gives a cloud backup and the same data on another PC. Portable mode keeps it beside the exe.
+const locationFile = () => path.join(app.getPath('userData'), 'data-location.json');
+let DATA_DIR = null;
+function dataDir() {
+  if (DATA_DIR) return DATA_DIR;
+  DATA_DIR = app.getPath('userData');
+  if (!PORTABLE) {
+    try {
+      const p = JSON.parse(fs.readFileSync(locationFile(), 'utf8'));
+      if (p && p.dir && fs.existsSync(p.dir)) DATA_DIR = p.dir;
+    } catch (_) {}
+  }
+  return DATA_DIR;
+}
+const imagesDir = () => path.join(dataDir(), 'images');
 
 // ---------- single instance ----------
 if (!app.requestSingleInstanceLock()) {
@@ -44,9 +61,11 @@ let tray = null;
 let quitting = false;
 
 // ---------- data store ----------
-const dataFile = () => path.join(app.getPath('userData'), 'hearth-data.json');
+const dataFile = () => path.join(dataDir(), 'hearth-data.json');
 let data = null;
 let writeTimer = null;
+let lastWriteMtime = 0;
+let lastRendererSave = 0;
 
 function defaultData() {
   return {
@@ -82,6 +101,7 @@ function loadData() {
     const parsed = JSON.parse(raw);
     const def = defaultData();
     data = { ...def, ...parsed, settings: { ...def.settings, ...(parsed.settings || {}) } };
+    try { lastWriteMtime = fs.statSync(dataFile()).mtimeMs; } catch (_) {}
   } catch (e) {
     if (fs.existsSync(dataFile())) {
       // keep a copy of a damaged file rather than silently losing it
@@ -99,8 +119,9 @@ function writeNow() {
     const tmp = dataFile() + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
     fs.renameSync(tmp, dataFile());
+    try { lastWriteMtime = fs.statSync(dataFile()).mtimeMs; } catch (_) {}
     // rolling daily backup
-    const backup = path.join(app.getPath('userData'), 'backups');
+    const backup = path.join(dataDir(), 'backups');
     fs.mkdirSync(backup, { recursive: true });
     const stamp = new Date().toISOString().slice(0, 10);
     const bfile = path.join(backup, `hearth-${stamp}.json`);
@@ -406,6 +427,7 @@ ipcMain.handle('store:set', (e, next) => {
     if (!found) inboxSticky(next, r.st);
   }
   data = next;
+  lastRendererSave = Date.now();
   scheduleWrite();
   broadcast('store:changed', null, e.sender);
   if (JSON.stringify(prevSettings) !== JSON.stringify(next.settings)) {
@@ -513,7 +535,7 @@ ipcMain.handle('sound:stop', (e, fast) => {
 ipcMain.handle('sound:volume', (e, v) => { playerVol = +v; setPlayerVolume(playerVol, 250); return true; });
 
 // ---------- notebooks: videos ----------
-const mediaDir = () => path.join(app.getPath('userData'), 'media');
+const mediaDir = () => path.join(dataDir(), 'media');
 ipcMain.handle('notes:pickVideo', async () => {
   const res = await dialog.showOpenDialog(mainWindow, { title: 'Add a video to this page', properties: ['openFile'], filters: [{ name: 'Videos', extensions: ['mp4', 'webm', 'mov', 'm4v', 'ogg', 'ogv'] }] });
   if (res.canceled || !res.filePaths[0]) return null;
@@ -682,6 +704,134 @@ ipcMain.handle('spell:langs', () => {
   return list;
 });
 
+// ------------------------------------------------------------------ data folder: choose, watch, open-elsewhere
+function copyDirIfAny(from, to) { try { if (fs.existsSync(from)) fs.cpSync(from, to, { recursive: true, force: false, errorOnExist: false }); } catch (e) { console.error('copy', e); } }
+function switchDataDir(dir, mode) {
+  // mode 'use' = load what's already there, 'move' = take this PC's data with us
+  const from = dataDir();
+  writeNow();
+  if (mode === 'move') {
+    fs.mkdirSync(dir, { recursive: true });
+    for (const sub of ['images', 'media', 'backups']) copyDirIfAny(path.join(from, sub), path.join(dir, sub));
+  }
+  stopWatch(); releaseLock();
+  const isDefault = path.resolve(dir) === path.resolve(app.getPath('userData'));
+  try { if (isDefault) fs.unlinkSync(locationFile()); else fs.writeFileSync(locationFile(), JSON.stringify({ dir, from, at: Date.now() }, null, 2)); } catch (_) {}
+  DATA_DIR = dir;
+  if (mode === 'move') writeNow(); else loadData();
+  startWatch(); takeLock();
+  for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w !== player) w.webContents.reload();
+}
+ipcMain.handle('data:where', () => ({ dir: dataDir(), file: dataFile(), isDefault: path.resolve(dataDir()) === path.resolve(app.getPath('userData')), portable: PORTABLE, defaultDir: app.getPath('userData') }));
+ipcMain.handle('data:choose', async () => {
+  if (PORTABLE) return { error: 'portable' };
+  const res = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose a folder for your Hearth data (e.g. in OneDrive)', properties: ['openDirectory', 'createDirectory'],
+    defaultPath: process.env.OneDriveCommercial || process.env.OneDrive || app.getPath('documents')
+  });
+  if (res.canceled || !res.filePaths[0]) return null;
+  let dir = res.filePaths[0];
+  // keep things tidy: use a "Hearth" folder inside whatever was picked, unless it already holds Hearth data
+  if (!fs.existsSync(path.join(dir, 'hearth-data.json')) && path.basename(dir).toLowerCase() !== 'hearth') dir = path.join(dir, 'Hearth');
+  if (path.resolve(dir) === path.resolve(dataDir())) return { same: true };
+  let mode = 'move';
+  const existing = path.join(dir, 'hearth-data.json');
+  if (fs.existsSync(existing)) {
+    let when = ''; try { when = fs.statSync(existing).mtime.toLocaleString('en-GB'); } catch (_) {}
+    const r = await dialog.showMessageBox(mainWindow, {
+      type: 'question', title: 'Hearth data found', noLink: true, cancelId: 2, defaultId: 0,
+      message: 'This folder already has Hearth data in it.',
+      detail: `It was last saved ${when}.\n\nUse it: switch to that data (what's on this PC stays where it is as a fallback).\nReplace it: overwrite it with the data on this PC.`,
+      buttons: ['Use the data in that folder', 'Replace it with this PC\'s data', 'Cancel']
+    });
+    if (r.response === 2) return null;
+    mode = r.response === 0 ? 'use' : 'move';
+    if (mode === 'move') { try { fs.copyFileSync(existing, existing + '.replaced-' + Date.now()); } catch (_) {} }
+  }
+  switchDataDir(dir, mode);
+  return { dir, mode };
+});
+ipcMain.handle('data:reset', async () => {
+  if (PORTABLE) return null;
+  const def = app.getPath('userData');
+  if (path.resolve(def) === path.resolve(dataDir())) return { same: true };
+  const r = await dialog.showMessageBox(mainWindow, {
+    type: 'question', title: 'Back to this PC', noLink: true, cancelId: 1, defaultId: 0,
+    message: 'Keep your data on this PC only?',
+    detail: 'Your current data is copied back into this PC\'s Hearth folder. The copy in the other folder is left untouched.',
+    buttons: ['Copy it back and switch', 'Cancel']
+  });
+  if (r.response !== 0) return null;
+  switchDataDir(def, 'move');
+  return { dir: def };
+});
+
+// notice when another PC (via OneDrive etc.) changes the data file
+let watching = null;
+function startWatch() {
+  stopWatch();
+  const f = dataFile(); watching = f;
+  fs.watchFile(f, { interval: 4000 }, (cur) => {
+    if (!cur || !cur.mtimeMs || Math.abs(cur.mtimeMs - lastWriteMtime) < 5 || writeTimer) return;
+    let parsed;
+    try { parsed = JSON.parse(fs.readFileSync(f, 'utf8')); if (!Array.isArray(parsed.tasks)) return; } catch (_) { return; } // mid-sync: try next time
+    lastWriteMtime = cur.mtimeMs;
+    if (JSON.stringify(parsed) === JSON.stringify(data)) return; // same content re-synced: nothing to do
+    if (Date.now() - lastRendererSave < 15000) {
+      // you're busy editing here: keep your version, park theirs beside it
+      const keep = path.join(dataDir(), `hearth-data.from-other-pc-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`);
+      try { fs.writeFileSync(keep, JSON.stringify(parsed, null, 2)); } catch (_) {}
+      scheduleWrite();
+      broadcast('data:external', { kept: 'mine', file: keep });
+      return;
+    }
+    const def = defaultData();
+    data = { ...def, ...parsed, settings: { ...def.settings, ...(parsed.settings || {}) } };
+    broadcast('data:external', { kept: 'theirs' });
+  });
+}
+function stopWatch() { if (watching) { try { fs.unwatchFile(watching); } catch (_) {} watching = null; } }
+
+// a small "open on" marker so two PCs sharing a folder can warn each other
+const lockFile = () => path.join(dataDir(), 'hearth-open.json');
+let lockTimer = null, otherPc = null;
+function takeLock() {
+  otherPc = null;
+  try {
+    const l = JSON.parse(fs.readFileSync(lockFile(), 'utf8'));
+    if (l && l.host && l.host !== os.hostname() && Date.now() - (l.at || 0) < 150000) otherPc = l.host;
+  } catch (_) {}
+  const beat = () => { try { fs.writeFileSync(lockFile(), JSON.stringify({ host: os.hostname(), at: Date.now() })); } catch (_) {} };
+  beat(); clearInterval(lockTimer); lockTimer = setInterval(beat, 60000);
+}
+function releaseLock() {
+  clearInterval(lockTimer); lockTimer = null;
+  try { const l = JSON.parse(fs.readFileSync(lockFile(), 'utf8')); if (l.host === os.hostname()) fs.unlinkSync(lockFile()); } catch (_) {}
+}
+ipcMain.handle('data:otherPc', () => otherPc);
+
+// save a text file (CSV exports)
+ipcMain.handle('app:saveText', async (e, o) => {
+  const name = String((o && o.name) || 'export.txt').replace(/[\\/:*?"<>|]+/g, ' ');
+  const ext = path.extname(name).slice(1) || 'txt';
+  const res = await dialog.showSaveDialog(mainWindow, { title: 'Save', defaultPath: path.join(app.getPath('documents'), name), filters: [{ name: ext.toUpperCase(), extensions: [ext] }] });
+  if (res.canceled || !res.filePath) return false;
+  fs.writeFileSync(res.filePath, String((o && o.text) || ''), 'utf8');
+  return res.filePath;
+});
+
+// ------------------------------------------------------------------ UK bank holidays (gov.uk, free)
+ipcMain.handle('holidays:get', async () => {
+  try {
+    const r = await net.fetch('https://www.gov.uk/bank-holidays.json', { headers: { 'User-Agent': 'Hearth/' + app.getVersion() } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    const out = {};
+    for (const [k, v] of Object.entries(j)) out[k] = (v.events || []).map(e => [e.date, e.title]);
+    return out;
+  } catch (err) { return { error: String(err.message || err) }; }
+});
+
 // ------------------------------------------------------------------ weather (Open-Meteo, free and keyless)
 async function getJSON(url) {
   const r = await net.fetch(url, { headers: { 'User-Agent': 'Hearth/' + app.getVersion() } });
@@ -725,6 +875,7 @@ app.whenReady().then(() => {
   session.fromPartition('persist:hearth-sound').webRequest.onBeforeSendHeaders(yt, addReferrer);
   restoreDndSync(); // in case Hearth was closed mid-focus
   loadData();
+  startWatch(); takeLock();
   applySpelling();
   createMainWindow();
   createTray();
@@ -742,7 +893,7 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
-  quitting = true; writeNow(); restoreDndSync(); killPlayer();
+  quitting = true; writeNow(); stopWatch(); releaseLock(); restoreDndSync(); killPlayer();
   if (PORTABLE) { try { fs.unlinkSync(portableLnk()); } catch (_) {} }
 });
 app.on('will-quit', () => globalShortcut.unregisterAll());

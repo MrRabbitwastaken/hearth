@@ -80,6 +80,7 @@ window.ICONS = {
   cloudSun: '<path d="M8.5 7.2A3.5 3.5 0 0 1 14.6 6"/><path d="M8 2.5v1.3M3.4 4.4l.9.9M2 9h1.3"/><path d="M8.5 20h9a3.5 3.5 0 0 0 .3-7 5 5 0 0 0-9.6-.8A3.9 3.9 0 0 0 8.5 20z"/>',
   fog: '<path d="M6 10.5a5.5 5.5 0 0 1 11 0"/><path d="M3.5 14h17M5 17.5h14M7 21h10"/>',
   storm: '<path d="M7 16a4 4 0 0 1-.2-8A5.5 5.5 0 0 1 17.4 9 3.6 3.6 0 0 1 17 16"/><path d="M12.5 12.5l-2.5 4h3.5l-2.5 4.5"/>',
+  circle: '<circle cx="12" cy="12" r="7.5"/>',
   dot: '<circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/>',
   book: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5"/><path d="M8.5 7.5h7"/>',
   sticky: '<path d="M5 4h14a1 1 0 0 1 1 1v9l-6 6H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path d="M14 20v-5a1 1 0 0 1 1-1h5"/>',

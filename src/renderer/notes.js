@@ -2406,5 +2406,11 @@ function external() {
   }
 }
 
-window.Notes = { ctxMenu, view, mount, light, leave, actions, open, openJournal, journalWrap, deskCard, createForProject, external };
+// open a page and briefly highlight what was searched for (from Ctrl+K)
+function openFind(nbId, pgId, q) {
+  open(nbId, pgId);
+  const words = String(q || '').trim(); if (!words) return;
+  setTimeout(() => { const w = words.split(/\s+/).sort((a, b) => b.length - a.length)[0]; if (w && w.length > 1) { highlightSearch(w); setTimeout(() => { if (!ns.query.trim()) clearHighlight(); }, 6000); } }, 1000);
+}
+window.Notes = { ctxMenu, view, mount, light, leave, actions, open, openFind, openJournal, journalWrap, deskCard, createForProject, external };
 })();

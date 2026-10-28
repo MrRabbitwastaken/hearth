@@ -25,13 +25,13 @@ const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 function defaultData() {
   return {
     version: 1, tasks: [], projects: [], waiting: [], recurring: [], snippets: [], notebooks: [], pages: [], noteTemplates: [],
-    focusLog: [], dayLog: {}, meta: {},
+    focusLog: [], dayLog: {}, meta: {}, leave: [],
     settings: {
       name: '', breakInterval: 60, snoozeMinutes: 10, idleResetMinutes: 5,
       wrapTime: '17:00', focusMinutes: 25, launchAtStartup: true, closeToTray: true,
       staleProjectDays: 7, hotkey: 'CommandOrControl+Alt+Space', theme: 'light',
       nav: { hidden: [], order: [] },
-      season: 'auto', seasonFx: false, noteFont: 'auto', hiddenWidgets: [], widgetOrder: [], widgetsElsewhere: false, widgetPages: {}, weather: null, spellcheck: true, spellLang: 'en-GB', fxDefaultV2: true, customSounds: [], soundSources: {},
+      season: 'auto', seasonFx: false, noteFont: 'auto', hiddenWidgets: [], widgetOrder: [], widgetsElsewhere: false, widgetPages: {}, weather: null, spellcheck: true, spellLang: 'en-GB', bankRegion: 'england-and-wales', skipRoutinesOff: true, leaveAllowance: 0, leaveYearStart: 1, fxDefaultV2: true, customSounds: [], soundSources: {},
       sounds: true, volume: 0.6,
       ambient: 'rain', ambientAuto: true, ambientVolume: 0.5, focusShield: true, dnd: true,
       waterOn: true, waterEvery: 90, waterGoal: 8, postureOn: true, postureEvery: 45,
@@ -51,6 +51,7 @@ function normalise(d) {
   out.meta = out.meta || {};
   out.meta.breaks = out.meta.breaks || {};
   out.dayLog = out.dayLog || {};
+  out.leave = Array.isArray(out.leave) ? out.leave : [];
   out.notebooks = out.notebooks || [];
   out.pages = out.pages || [];
   out.noteTemplates = out.noteTemplates || [];
@@ -207,12 +208,152 @@ function newTask(title, { date, projectId = null, recurringId = null } = {}) {
 }
 function touchProject(pid) { const p = P.get(pid); if (p) p.updatedAt = Date.now(); }
 
+// ------------------------------------------------------------------ bank holidays & leave
+// UK bank holidays come from GOV.UK (refreshed weekly); a built-in list covers England & Wales if offline.
+const BH_FALLBACK = { 'england-and-wales': [
+  ['2025-01-01', 'New Year’s Day'], ['2025-04-18', 'Good Friday'], ['2025-04-21', 'Easter Monday'], ['2025-05-05', 'Early May bank holiday'], ['2025-05-26', 'Spring bank holiday'], ['2025-08-25', 'Summer bank holiday'], ['2025-12-25', 'Christmas Day'], ['2025-12-26', 'Boxing Day'],
+  ['2026-01-01', 'New Year’s Day'], ['2026-04-03', 'Good Friday'], ['2026-04-06', 'Easter Monday'], ['2026-05-04', 'Early May bank holiday'], ['2026-05-25', 'Spring bank holiday'], ['2026-08-31', 'Summer bank holiday'], ['2026-12-25', 'Christmas Day'], ['2026-12-28', 'Boxing Day (substitute day)'],
+  ['2027-01-01', 'New Year’s Day'], ['2027-03-26', 'Good Friday'], ['2027-03-29', 'Easter Monday'], ['2027-05-03', 'Early May bank holiday'], ['2027-05-31', 'Spring bank holiday'], ['2027-08-30', 'Summer bank holiday'], ['2027-12-27', 'Christmas Day (substitute day)'], ['2027-12-28', 'Boxing Day (substitute day)']
+] };
+const BH_REGIONS = [['england-and-wales', 'England & Wales'], ['scotland', 'Scotland'], ['northern-ireland', 'Northern Ireland'], ['none', 'None']];
+let bhCache = { key: '', map: new Map() };
+function bankHolidays() {
+  const reg = D.settings.bankRegion || 'england-and-wales';
+  if (reg === 'none') return new Map();
+  const live = D.meta.bankHols && D.meta.bankHols.data && D.meta.bankHols.data[reg];
+  const src = live && live.length ? live : (BH_FALLBACK[reg] || []);
+  const key = reg + ':' + ((D.meta.bankHols || {}).at || 0) + ':' + src.length;
+  if (bhCache.key !== key) bhCache = { key, map: new Map(src) };
+  return bhCache.map;
+}
+function refreshBankHolidays(force) {
+  if (!api.holidays) return Promise.resolve(false);
+  const m = D.meta.bankHols;
+  if (!force && m && Date.now() - m.at < 7 * 86400000) return Promise.resolve(false);
+  return api.holidays().then(r => {
+    if (r && !r.error && r['england-and-wales']) { D.meta.bankHols = { at: Date.now(), data: r }; save(); refresh(); return true; }
+    return false;
+  }).catch(() => false);
+}
+const isWeekend = (k) => { const g = parseKey(k).getDay(); return g === 0 || g === 6; };
+const leaveOn = (k) => (D.leave || []).find(l => l.start <= k && k <= (l.end || l.start));
+// what kind of day off k is (bank holiday / annual leave), or null
+function dayOff(k) {
+  const bh = bankHolidays().get(k);
+  if (bh) return { kind: 'bank', title: bh };
+  const l = leaveOn(k);
+  if (l && !isWeekend(k)) return { kind: 'leave', title: l.note || 'Annual leave', half: l.start === (l.end || l.start) ? (l.half || null) : null, leave: l };
+  return null;
+}
+const dayOffFull = (k) => { const o = dayOff(k); return !!o && !o.half; };
+const isWorkingDay = (k) => !isWeekend(k) && !dayOffFull(k);
+// leave year (e.g. Jan–Dec or Apr–Mar) containing day k
+function leaveYear(k = today()) {
+  const m0 = Math.max(1, Math.min(12, +D.settings.leaveYearStart || 1)) - 1, d = parseKey(k);
+  let y = d.getFullYear(); if (d.getMonth() < m0) y--;
+  const start = dayKey(new Date(y, m0, 1)), end = dayKey(new Date(y + 1, m0, 0));
+  return { start, end, label: `${parseKey(start).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })} – ${parseKey(end).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}` };
+}
+// working days a leave entry uses (weekends and bank holidays don't count), optionally clipped to a range
+function leaveDays(l, from, to) {
+  const a = from && from > l.start ? from : l.start, b = to && to < (l.end || l.start) ? to : (l.end || l.start);
+  let n = 0;
+  for (let k = a; k <= b; k = addDays(k, 1)) if (!isWeekend(k) && !bankHolidays().has(k)) n += (l.start === (l.end || l.start) && l.half) ? .5 : 1;
+  return n;
+}
+function leaveSummary() {
+  const yr = leaveYear();
+  const booked = (D.leave || []).reduce((s, l) => s + leaveDays(l, yr.start, yr.end), 0);
+  return { yr, booked, allowance: +D.settings.leaveAllowance || 0 };
+}
+const fmtDays = (n) => `${String(n).replace(/\.0$/, '')} day${n === 1 ? '' : 's'}`;
+function addLeave(start, end, half, note) {
+  if (!start) return null;
+  if (!end || end < start) end = start;
+  const l = { id: uid(), start, end, half: start === end && half ? half : null, note: (note || '').trim().slice(0, 80), createdAt: Date.now() };
+  D.leave.push(l); D.leave.sort((a, b) => a.start.localeCompare(b.start));
+  save(); refresh();
+  return l;
+}
+function leaveLabel(l) {
+  const one = l.start === (l.end || l.start);
+  const a = parseKey(l.start).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+  const b = one ? '' : ' – ' + parseKey(l.end).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+  return a + b + (one && l.half ? (l.half === 'am' ? ' (morning)' : ' (afternoon)') : '');
+}
+
+// ------------------------------------------------------------------ time per project
+// Everything lives in D.focusLog: focus sessions plus entries you log by hand (source: 'manual').
+function parseDuration(str) {
+  const t = String(str || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!t) return 0;
+  let m;
+  if ((m = t.match(/^(\d+):(\d{1,2})$/))) return (+m[1]) * 60 + (+m[2]);
+  if ((m = t.match(/^(\d+(?:\.\d+)?)\s*h(?:rs?|ours?)?(?:\s*(\d+)\s*m(?:ins?)?)?$/))) return Math.round(parseFloat(m[1]) * 60 + (+m[2] || 0));
+  if ((m = t.match(/^(\d+)\s*m(?:ins?)?$/))) return +m[1];
+  if ((m = t.match(/^(\d+(?:\.\d+)?)$/))) return parseFloat(m[1]) <= 12 && m[1].includes('.') ? Math.round(parseFloat(m[1]) * 60) : Math.round(parseFloat(m[1]));
+  return 0;
+}
+function logTime(projectId, minutes, { date = today(), taskId = null, note = '' } = {}) {
+  minutes = Math.round(minutes); if (!(minutes > 0)) return null;
+  const t = taskId ? T.get(taskId) : null;
+  const e = { id: uid(), date, minutes, taskId: taskId || null, projectId: projectId || null, label: note || (t ? t.title : ''), note: note || '', source: 'manual', at: Date.now() };
+  D.focusLog.push(e);
+  if (projectId) touchProject(projectId);
+  save();
+  return e;
+}
+function projectTime(pid) {
+  const wk = new Set(weekDays(0)), mon = today().slice(0, 7);
+  let week = 0, month = 0, total = 0;
+  D.focusLog.forEach(l => { if ((l.projectId || null) !== (pid || null)) return; total += l.minutes; if (wk.has(l.date)) week += l.minutes; if (l.date.slice(0, 7) === mon) month += l.minutes; });
+  return { week, month, total };
+}
+function modalLogTime(pid) {
+  const p = pid ? P.get(pid) : null;
+  const tasks = p ? T.ofProject(p.id).filter(t => !t.done || t.doneAt > Date.now() - 14 * 86400000) : [];
+  const f = state.logForm || {};
+  return `<div class="scrim" data-act="modal-close"></div>
+  <div class="modal log-modal" role="dialog" aria-label="Log time">
+    <div class="modal-head"><div class="eyebrow">${icon('clock', 'sm')} Log time</div><h2>${esc(p ? p.name : 'General')}</h2><p>Add time you spent outside a focus session, e.g. a meeting or a call.</p></div>
+    <div class="modal-body" data-body>
+      <div class="field"><label>How long</label><div class="row wrap" style="gap:6px">
+        ${[15, 30, 45, 60, 90, 120].map(m => `<button class="chip-toggle ${f.mins === m ? 'on' : ''}" data-act="lt-quick" data-v="${m}">${fmtMins(m)}</button>`).join('')}
+        <input class="input" id="lt-dur" placeholder="or type: 1h 20m, 1:20, 80" value="${esc(f.text || '')}" style="width:190px" data-enter="lt-save"></div></div>
+      <div class="row wrap" style="gap:14px">
+        <div class="field"><label>Date</label><input class="input" type="date" id="lt-date" value="${f.date || today()}" max="${today()}" style="width:170px"></div>
+        ${tasks.length ? `<div class="field" style="flex:1;min-width:200px"><label>Task (optional)</label><select class="select" id="lt-task"><option value="">No particular task</option>${tasks.map(t => `<option value="${t.id}" ${f.taskId === t.id ? 'selected' : ''}>${esc(t.title.slice(0, 70))}</option>`).join('')}</select></div>` : ''}
+      </div>
+      <div class="field"><label>Note (optional)</label><input class="input" id="lt-note" placeholder="e.g. Vendor call, driver testing" maxlength="120" value="${esc(f.note || '')}" data-enter="lt-save"></div>
+    </div>
+    <div class="modal-foot" data-foot><button class="btn ghost" data-act="modal-close">Cancel</button><button class="btn primary" data-act="lt-save">${icon('check', 'sm')}Log it</button></div>
+  </div>`;
+}
+function timeHistoryHtml(pid) {
+  const list = D.focusLog.filter(l => (l.projectId || null) === (pid || null)).sort((a, b) => b.date.localeCompare(a.date) || (b.at || 0) - (a.at || 0)).slice(0, 12);
+  if (!list.length) return '<div class="muted" style="font-size:13px">No time logged yet. Focus sessions add up here automatically, or log time by hand.</div>';
+  return `<div class="time-hist">${list.map(l => { const t = l.taskId ? T.get(l.taskId) : null;
+    return `<div class="th-row" data-k="th-${l.id}"><span class="th-ic ${l.source === 'manual' ? 'man' : ''}" title="${l.source === 'manual' ? 'Logged by hand' : 'Focus session'}">${icon(l.source === 'manual' ? 'clock' : 'target', 'sm')}</span>
+      <span class="th-when">${relDay(l.date)}</span><span class="th-what">${esc(l.note || (t ? t.title : l.label) || (l.source === 'manual' ? 'Logged time' : 'Focus session'))}</span>
+      <b>${fmtMins(l.minutes)}</b><button class="icon-btn mini danger" data-act="lt-del" data-v="${l.id}" title="Remove this entry">${icon('x', 'sm')}</button></div>`; }).join('')}</div>`;
+}
+function timeCsv(days) {
+  const set = new Set(days);
+  const rows = [['Date', 'Project', 'Task', 'Minutes', 'Hours', 'Source', 'Note']];
+  D.focusLog.filter(l => set.has(l.date)).sort((a, b) => a.date.localeCompare(b.date) || (a.at || 0) - (b.at || 0)).forEach(l => {
+    const p = l.projectId ? P.get(l.projectId) : null, t = l.taskId ? T.get(l.taskId) : null;
+    rows.push([l.date, p ? p.name : 'General', t ? t.title : (l.source === 'manual' ? '' : l.label || ''), l.minutes, (l.minutes / 60).toFixed(2), l.source === 'manual' ? 'Logged' : 'Focus', l.note || '']);
+  });
+  const q = (v) => { const x = String(v ?? ''); return /[",\n]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x; };
+  return rows.map(r => r.map(q).join(',')).join('\r\n');
+}
+
 // ------------------------------------------------------------------ recurring
 // first or last Monday–Friday of a month, as a day key
 function workingDayOfMonth(y, m, which) {
   const t = which === 'last' ? new Date(y, m + 1, 0) : new Date(y, m, 1);
   const step = which === 'last' ? -1 : 1;
-  while (t.getDay() === 0 || t.getDay() === 6) t.setDate(t.getDate() + step);
+  while (t.getDay() === 0 || t.getDay() === 6 || bankHolidays().has(dayKey(t))) t.setDate(t.getDate() + step);
   return dayKey(t);
 }
 const MDAY_OPTS = [['day', 'On a day of the month'], ['first', 'First working day'], ['last', 'Last working day']];
@@ -220,8 +361,8 @@ function ruleMatches(r, k) {
   const d = parseKey(k), wd = d.getDay();
   switch (r.freq) {
     case 'daily': return true;
-    case 'weekdays': return wd >= 1 && wd <= 5;
-    case 'weekly': return (r.days || []).includes(wd);
+    case 'weekdays': return wd >= 1 && wd <= 5 && !(D.settings.skipRoutinesOff !== false && dayOffFull(k));
+    case 'weekly': return (r.days || []).includes(wd) && !(D.settings.skipRoutinesOff !== false && dayOffFull(k));
     case 'monthly': {
       if (r.mday === 'first' || r.mday === 'last') return k === workingDayOfMonth(d.getFullYear(), d.getMonth(), r.mday);
       const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
@@ -378,6 +519,7 @@ function buildSidebar() {
   $('#sidebar').innerHTML = `
     <div class="brand"><img class="brand-logo" src="logo.png" alt="" draggable="false"><div class="brand-name">Hearth</div>
       <button class="icon-btn mini sound-toggle ${D.settings.sounds ? '' : 'muted'}" data-act="sound-toggle" title="${D.settings.sounds ? 'Mute sounds' : 'Turn sounds on'}">${icon(D.settings.sounds ? 'volume' : 'mute', 'sm')}</button></div>
+    <button class="side-search" data-act="search-open" title="Search everything (Ctrl+K)">${icon('search', 'sm')}<span>Search</span><kbd>Ctrl K</kbd></button>
     <nav class="nav" id="nav"><div class="nav-pill" id="nav-pill"></div>
       ${ids.slice(0, -1).map(item).join('')}
       <div class="nav-sep"></div>
@@ -543,7 +685,7 @@ function viewToday() {
   return `<div class="${stg()}">
     <div class="page-head">
       <div><h1>${greeting()}${name}</h1>
-        <div class="sub">${fmtLong(today())} · ${allToday.length ? plural(allToday.length, 'task') + ' left today' : total ? 'All done for today' : 'Nothing planned yet'}</div></div>
+        <div class="sub">${(() => { const o = dayOff(today()); return o ? `<span class="chip ${o.kind === 'bank' ? 'honey' : 'sage'} off-chip">${icon(o.kind === 'bank' ? 'flag' : 'sun', 'sm')}${esc(o.kind === 'bank' ? o.title : o.half ? `Half day (${o.half === 'am' ? 'morning' : 'afternoon'} off)` : 'On leave')}</span> ` : ''; })()}${fmtLong(today())} · ${allToday.length ? plural(allToday.length, 'task') + ' left today' : total ? 'All done for today' : 'Nothing planned yet'}</div></div>
       <div class="actions">
         ${stk ? `<div class="streak-chip" title="Good days in a row (weekends don't break it)">${icon('flame', 'sm')}<b>${stk}</b> day streak</div>` : ''}
         ${total ? `<div class="progress-ring">${ring(46, 5, pct, { cls: 'sage', label: Math.round(pct * 100) + '%' })}<div class="txt"><b>${done.length}/${total}</b><span>done today</span></div></div>` : ''}
@@ -658,9 +800,9 @@ function widgetMenu(id, x, y) {
     '-',
     { label: 'Hide this widget', ic: 'eyeOff', fn: () => { setWidget(id, false); toast(`${w.name} hidden. Bring it back in Settings.`, { ic: 'eye', action: { label: 'Undo', fn: () => setWidget(id, true) } }); } }];
   if (id === 'water' && D.settings.waterOn !== false) items.push({ label: 'Turn off water nudges too', ic: 'bellOff', fn: () => { D.settings.waterOn = false; setWidget(id, false); toast('Water tracking and nudges are off. Turn them back on in Settings.', { ic: 'drop' }); } });
-  if (id === 'timeleft') items.push({ label: 'Set my work hours…', ic: 'clock', fn: () => actions['work-setup']() });
-  if (id === 'weather' && D.settings.weather) items.push({ label: 'Change town…', ic: 'search', fn: () => actions['wx-change']() });
-  items.push('-', { label: 'Choose widgets…', ic: 'sliders', fn: () => actions['widgets-manage']() });
+  if (id === 'timeleft') items.push({ label: 'Set my work hours…', ic: 'clock', fn: () => ACTIONS['work-setup']() });
+  if (id === 'weather' && D.settings.weather) items.push({ label: 'Change town…', ic: 'search', fn: () => ACTIONS['wx-change']() });
+  items.push('-', { label: 'Choose widgets…', ic: 'sliders', fn: () => ACTIONS['widgets-manage']() });
   window.Notes.ctxMenu(items, x, y);
 }
 function widgetHtml(id) {
@@ -740,8 +882,11 @@ function shiftFor(d) {
   const w = work(), wi = weekIndexFor(d), wk = w.weeks[wi];
   if (!wk || !wk.days.includes(d.getDay())) return null;
   const at = (hm) => { const [h, m] = String(hm || '').split(':').map(Number); const x = new Date(d); x.setHours(h || 0, m || 0, 0, 0); return x; };
-  const s = at(wk.start), e = at(wk.end);
-  return e > s ? { start: s, end: e, week: wi } : null;
+  let s = at(wk.start), e = at(wk.end);
+  const off = dayOff(dayKey(d));
+  if (off && !off.half) return null;
+  if (off && off.half) { const mid = new Date((s.getTime() + e.getTime()) / 2); if (off.half === 'am') s = mid; else e = mid; }
+  return e > s ? { start: s, end: e, week: wi, half: off ? off.half : null } : null;
 }
 function nextShift(from) { for (let i = 1; i <= 21; i++) { const d = new Date(from); d.setDate(d.getDate() + i); const sh = shiftFor(d); if (sh) return sh; } return null; }
 const clock12 = (d) => { const h = d.getHours(), m = d.getMinutes(); return `${h % 12 || 12}${m ? ':' + pad(m) : ''}${h < 12 ? 'am' : 'pm'}`; };
@@ -759,12 +904,39 @@ function timeLeftInner() {
   }
   const n = nextShift(now);
   const when = n ? (dayKey(n.start) === tomorrow() ? 'Tomorrow' : n.start.toLocaleDateString('en-GB', { weekday: 'long' })) : '';
-  return `<div class="tl-big">${sh ? 'Done for today' : 'Day off'}</div><div class="tl-bar done"><i style="width:${sh ? 100 : 0}%"></i></div>
+  const offT = dayOff(dayKey(now));
+  return `<div class="tl-big">${sh ? 'Done for today' : offT ? (offT.kind === 'bank' ? 'Bank holiday' : 'On leave') : 'Day off'}</div>${offT && !sh ? `<div class="tl-off">${icon(offT.kind === 'bank' ? 'flag' : 'sun', 'sm')} ${esc(offT.title)}</div>` : ''}<div class="tl-bar done"><i style="width:${sh ? 100 : 0}%"></i></div>
     <div class="tl-sub">${n ? `Next: ${when} ${clock12(n.start)} – ${clock12(n.end)}${wk(n.week)}` : 'No working days set yet'}</div>`;
 }
 function timeLeftCard() {
   return `<div class="card tl-card" data-k="c-time"><h3>${icon('clock', 'sm')} Time left today <span class="right"><button class="link" data-act="work-setup">Hours</button></span></h3>
     <div data-live="timeleft">${timeLeftInner()}</div></div>`;
+}
+function leaveSettingsCard() {
+  const s = D.settings, sum = leaveSummary(), t = today();
+  const next = [...bankHolidays().entries()].filter(([k]) => k >= t).sort()[0];
+  const m = D.meta.bankHols;
+  const yrList = (D.leave || []).filter(l => (l.end || l.start) >= sum.yr.start && l.start <= sum.yr.end || (l.end || l.start) >= t).sort((a, b) => a.start.localeCompare(b.start));
+  return `<div class="card" id="set-leave"><h3>${icon('sun', 'sm')} Holidays & leave</h3>
+    <div class="hint" style="margin-bottom:4px">Days off pause your routines (except daily ones), keep your streak safe, and show on the calendar and in <strong>Time left today</strong>.</div>
+    <div class="set-row" style="border-top:0"><div class="t"><b>Bank holidays</b><span>${s.bankRegion === 'none' ? 'Not used.' : `${m ? `Updated from GOV.UK ${relLow(dayKey(new Date(m.at)))}` : 'Using the built-in list until GOV.UK can be reached'}.${next ? ` Next: <strong>${esc(next[1])}</strong>, ${parseKey(next[0]).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}.` : ''}`}</span></div>
+      <select class="select" data-set="bankRegion" style="width:180px">${BH_REGIONS.map(([v, l]) => `<option value="${v}" ${s.bankRegion === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      ${s.bankRegion !== 'none' ? `<button class="icon-btn" data-act="bh-refresh" title="Check GOV.UK now">${icon('reset', 'sm')}</button>` : ''}</div>
+    <div class="set-row"><div class="t"><b>Pause routines on days off</b><span>Weekday and weekly routines skip bank holidays and leave. Daily and monthly ones still run.</span></div>${`<button class="switch ${s.skipRoutinesOff !== false ? 'on' : ''}" data-act="set-toggle" data-v="skipRoutinesOff"></button>`}</div>
+    <div class="set-row"><div class="t"><b>Annual leave allowance</b><span>${sum.allowance ? `<strong>${fmtDays(sum.booked)}</strong> booked of ${fmtDays(sum.allowance)} · <strong>${fmtDays(Math.max(0, sum.allowance - sum.booked))} left</strong> (${sum.yr.label})` : `Set your yearly days to see how many you have left. ${fmtDays(sum.booked)} booked in ${sum.yr.label}.`}</span></div>
+      <input class="input num-input" type="number" min="0" max="80" step="0.5" value="${sum.allowance || ''}" placeholder="—" data-set="leaveAllowance" data-type="float"><span class="muted">days · year starts</span>
+      <select class="select" data-set="leaveYearStart" data-type="num" style="width:90px">${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((n, i) => `<option value="${i + 1}" ${+s.leaveYearStart === i + 1 ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+    ${sum.allowance ? `<div class="leave-meter"><i style="width:${Math.min(100, sum.booked / sum.allowance * 100)}%"></i></div>` : ''}
+    <div class="leave-add">
+      <div class="field"><label>From</label><input class="input" type="date" id="lv-from"></div>
+      <div class="field"><label>To</label><input class="input" type="date" id="lv-to"></div>
+      <div class="field"><label>Length</label><select class="select" id="lv-half"><option value="">Full days</option><option value="am">Morning off (½)</option><option value="pm">Afternoon off (½)</option></select></div>
+      <div class="field" style="flex:1;min-width:150px"><label>Note</label><input class="input" id="lv-note" placeholder="e.g. Cornwall, dentist" maxlength="80" data-enter="leave-add"></div>
+      <button class="btn primary" data-act="leave-add" style="height:42px">${icon('plus', 'sm')}Add leave</button></div>
+    <div class="leave-list">${yrList.length ? yrList.map(l => `<div class="leave-row ${(l.end || l.start) < t ? 'past' : ''}" data-k="lv-${l.id}"><span class="lv-ic">${icon('sun', 'sm')}</span>
+      <span class="lv-when">${leaveLabel(l)}${l.note ? `<small>${esc(l.note)}</small>` : ''}</span><span class="chip">${fmtDays(leaveDays(l))}</span>
+      <button class="icon-btn mini danger" data-act="leave-del" data-v="${l.id}" title="Remove">${icon('trash', 'sm')}</button></div>`).join('') : '<div class="muted" style="font-size:13px;padding:6px 2px">No leave booked yet. You can also right-click a day on the Calendar.</div>'}</div>
+  </div>`;
 }
 function workSettingsCard() {
   const w = work();
@@ -972,7 +1144,7 @@ function streak() {
     const wd = parseKey(k).getDay();
     const good = dayScore(k).total >= GOOD_DAY;
     if (good) n++;
-    else if (wd !== 0 && wd !== 6) break;
+    else if (wd !== 0 && wd !== 6 && !dayOffFull(k)) break;
     k = addDays(k, -1);
   }
   return n;
@@ -1099,6 +1271,9 @@ function projectCardBig(p) {
     <div class="add-bar pb-add">${icon('plus', 'sm')}<input id="pa-${p.id}" data-pid="${p.id}" data-enter="p-add-inline" placeholder="Add a task to ${esc(p.name)}… (dates work too: 'fri', 'tomorrow 2pm')" maxlength="300"></div>
     ${done.length ? `<button class="link pb-done-toggle" data-act="p-done-toggle" data-pid="${p.id}">${icon(showDone ? 'chevronUp' : 'chevron', 'sm')}${showDone ? 'Hide' : 'Show'} ${plural(done.length, 'finished task')}</button>
       ${showDone ? `<div class="list pb-done">${done.map(t => taskRow(t, { ctx: 'proj' })).join('')}</div>` : ''}` : ''}
+    ${(() => { const tm = projectTime(p.id); return `<div class="pb-time"><span class="label-sm">${icon('clock', 'sm')} Time</span>
+      <span class="pb-tsum">This week <b>${fmtMins(tm.week)}</b> · this month <b>${fmtMins(tm.month)}</b> · all time <b>${fmtMins(tm.total)}</b></span>
+      <span class="pb-tbtns">${[15, 30, 60].map(m => `<button class="pill-btn soft" data-act="lt-add" data-pid="${p.id}" data-v="${m}" title="Log ${fmtMins(m)} for today">+${fmtMins(m)}</button>`).join('')}<button class="pill-btn" data-act="lt-open" data-pid="${p.id}">${icon('plus', 'sm')}Log…</button></span></div>`; })()}
     <div class="pb-notes"><label class="label-sm" for="pnt-${p.id}">${icon('note', 'sm')} Notes</label>
       <textarea class="textarea pb-notes-box" id="pnt-${p.id}" data-pid="${p.id}" data-pnotes="1" rows="3" placeholder="Links, decisions, contacts, commands, anything useful… (saves as you type)">${esc(p.notes || '')}</textarea></div>
   </div>`;
@@ -1268,10 +1443,12 @@ function weekSummary(days) {
   const logs = D.focusLog.filter(l => set.has(l.date));
   const focusMin = logs.reduce((s, l) => s + l.minutes, 0);
   const byProj = {};
-  logs.forEach(l => { const k = l.projectId || ''; byProj[k] = (byProj[k] || 0) + l.minutes; });
+  const byProjManual = {};
+  logs.forEach(l => { const k = l.projectId || ''; byProj[k] = (byProj[k] || 0) + l.minutes; if (l.source === 'manual') byProjManual[k] = (byProjManual[k] || 0) + l.minutes; });
+  const manualMin = logs.filter(l => l.source === 'manual').reduce((a, l) => a + l.minutes, 0);
   const breaks = days.reduce((s, k) => s + (D.meta.breaks[k] || 0), 0);
   const received = D.waiting.filter(w => w.done && set.has(w.doneDate)).length;
-  return { doneBy, doneCount, focusMin, byProj, breaks, received };
+  return { doneBy, doneCount, focusMin, byProj, byProjManual, manualMin, breaks, received };
 }
 function viewWeek() {
   const days = weekDays(state.weekOffset);
@@ -1290,7 +1467,7 @@ function viewWeek() {
         <button class="btn primary" data-act="week-copy">${icon('copy', 'sm')}Copy summary</button></div></div>
     <div class="stat-row">
       <div class="card"><b>${s.doneCount}</b><span>tasks completed</span></div>
-      <div class="card"><b>${fmtMins(s.focusMin)}</b><span>focused time</span></div>
+      <div class="card"><b>${fmtMins(s.focusMin)}</b><span>time on projects${s.manualMin ? ` <small>(${fmtMins(s.manualMin)} logged by hand)</small>` : ''}</span></div>
       <div class="card"><b>${s.breaks}</b><span>screen breaks taken</span></div>
       <div class="card streak-tile"><b>${icon('flame')}${stk}</b><span>good-day streak</span></div>
     </div>
@@ -1301,11 +1478,11 @@ function viewWeek() {
           const sc = scores[i];
           return `<div class="col"><div class="v">${n || ''}</div><div class="b ${k === today() ? 'today' : ''}" style="height:${Math.max(3, (n / max) * 110)}px"></div><div class="d">${WEEKDAYS[parseKey(k).getDay()]}</div>${sc == null ? '<span class="dscore none">·</span>' : `<span class="dscore ${sc >= GOOD_DAY ? 'good' : ''}" title="Good-day score">${sc}</span>`}</div>`;
         }).join('')}</div></div>
-      <div class="card"><h3>${icon('target', 'sm')} Focus by project</h3>
+      <div class="card"><h3>${icon('clock', 'sm')} Time by project <span class="right"><button class="link" data-act="week-csv" title="Save this week's time as a spreadsheet (CSV)">${icon('download', 'sm')} CSV</button></span></h3>
         ${projRows.length ? projRows.map(([pid, m]) => {
-          const p = pid ? P.get(pid) : null;
-          return `<div class="hbar"><span class="name">${esc(p ? p.name : 'General')}</span><span class="track"><i style="width:${(m / pmax) * 100}%;background:${p ? p.color : 'var(--text-3)'}"></i></span><span class="val">${fmtMins(m)}</span></div>`;
-        }).join('') : '<div class="muted">No focus sessions logged this week. Press ▶ on a task to start one.</div>'}
+          const p = pid ? P.get(pid) : null, man = s.byProjManual[pid] || 0;
+          return `<div class="hbar" title="${fmtMins(m - man)} focus · ${fmtMins(man)} logged"><span class="name">${esc(p ? p.name : 'General')}</span><span class="track"><i style="width:${((m - man) / pmax) * 100}%;background:${p ? p.color : 'var(--text-3)'}"></i><i class="man" style="width:${(man / pmax) * 100}%;--c:${p ? p.color : 'var(--text-3)'}"></i></span><span class="val">${fmtMins(m)}</span></div>`;
+        }).join('') + `<div class="hbar-key"><span><i></i>Focus</span><span><i class="man"></i>Logged by hand</span></div>` : '<div class="muted">No time logged this week. Press ▶ on a task to focus, or log time on a project.</div>'}
         ${s.received ? `<div class="muted" style="margin-top:12px">${plural(s.received, 'thing')} you were waiting on arrived.</div>` : ''}</div>
     </div>
     <div class="card"><h3>${icon('note', 'sm')} What got done</h3>
@@ -1327,7 +1504,7 @@ function weekText() {
   });
   lines.push('', `Good-day streak: ${streak()} day(s)`);
   if (s.focusMin) {
-    lines.push('', `Focus time: ${fmtMins(s.focusMin)}`);
+    lines.push('', `Time on projects: ${fmtMins(s.focusMin)}`);
     Object.entries(s.byProj).sort((a, b) => b[1] - a[1]).forEach(([pid, m]) => { const p = pid ? P.get(pid) : null; lines.push(`  - ${p ? p.name : 'General'}: ${fmtMins(m)}`); });
   }
   const act = P.active();
@@ -1385,6 +1562,8 @@ function viewSettings() {
 
       ${workSettingsCard()}
 
+      ${leaveSettingsCard()}
+
       <div class="card"><h3>${icon('plus', 'sm')} Tasks & calendar</h3>
         <div class="set-row"><div class="t"><b>Smart quick-add</b><span>Understands dates and times ("fri 2pm", "tomorrow", "25/11"), #labels, !1–!3 priority and @project.</span></div>${sw('smartAdd')}</div>
         <div class="set-row"><div class="t"><b>Remind me at task times</b><span>Tasks with a time get a reminder automatically. You can change it per task.</span></div>${sw('remindAtTime')}</div>
@@ -1423,7 +1602,8 @@ function viewSettings() {
         <div class="set-row"><div class="t"><b>Keep running in the tray when closed</b><span>Closing the window keeps reminders going. Quit from the tray icon.</span></div>${sw('closeToTray')}</div>
         <div class="set-row"><div class="t"><b>Quick-capture shortcut</b><span>Add a task or sticky from anywhere. Uses Electron accelerator format.</span></div><input class="input" value="${esc(s.hotkey)}" data-set="hotkey" style="width:230px;font-family:var(--font-mono);font-size:12.5px"></div></div>
       <div class="card"><h3>${icon('download', 'sm')} Your data</h3>
-        <div class="set-row"><div class="t"><b>Stored locally</b><span class="code-path" data-live="datapath">…</span><span style="display:block">A dated backup is kept automatically each day (last 14).</span></div></div>
+        <div class="set-row"><div class="t"><b>Data folder</b><span class="code-path" data-live="datapath">…</span><span style="display:block" data-live="datawhere">A dated backup is kept automatically each day (last 14).</span></div>
+          ${state.appInfo.portable ? '' : `<button class="btn" data-act="data-choose">${icon('folder', 'sm')}Change folder…</button><span data-live="datareset"></span>`}</div>
         <div class="set-row"><div class="t"><b>Backup & restore</b><span>Export everything to a JSON file, or restore from one.</span></div>
           <button class="btn" data-act="export">${icon('download', 'sm')}Export</button><button class="btn" data-act="import">${icon('upload', 'sm')}Import</button></div></div>
     </div></div>`;
@@ -1457,7 +1637,14 @@ function renderView(transition) {
   }
   if (mod) mod.mount();
   if (state.view === 'projects') growNotes();
-  if (state.view === 'settings') api.dataPath().then(p => { const el = $('[data-live="datapath"]'); if (el) el.textContent = p; });
+  if (state.view === 'settings') {
+    api.dataPath().then(p => { const el = $('[data-live="datapath"]'); if (el) el.textContent = p; });
+    if (api.dataWhere) api.dataWhere().then(w => {
+      const el = $('[data-live="datawhere"]'), r = $('[data-live="datareset"]');
+      if (el) el.innerHTML = w.portable ? 'Portable mode: your data lives beside Hearth on this drive.' : w.isDefault ? 'On this PC only. Choose a OneDrive folder to back it up and use it on another PC too. Daily backups are kept (last 14).' : 'In your chosen folder (pictures, videos and daily backups live there too). Best used on one PC at a time.';
+      if (r) r.innerHTML = w.isDefault || w.portable ? '' : `<button class="btn ghost" data-act="data-reset">Use this PC only</button>`;
+    });
+  }
   updateLive();
 }
 function refresh() {
@@ -1499,7 +1686,7 @@ function closeModal() {
 function renderModal(fresh) {
   const root = $('#modal-root');
   const m = state.modal; if (!m) return;
-  const html = { project: modalProject, brief: modalBrief, wrap: modalWrap, task: (id) => window.Tasks.drawerHtml(id), sound: modalSound }[m.type](m.arg);
+  const html = { project: modalProject, brief: modalBrief, wrap: modalWrap, task: (id) => window.Tasks.drawerHtml(id), sound: modalSound, logtime: modalLogTime }[m.type](m.arg);
   if (!html) { state.modal = null; root.innerHTML = ''; return; }
   if (fresh) {
     root.innerHTML = html;
@@ -1553,6 +1740,9 @@ function modalProject(pid) {
         ${done.length ? `<div class="muted" style="margin:8px 4px 2px;font-size:12.5px">${plural(done.length, 'task')} done${done[0] ? ` · last: ${esc(done[0].title)}` : ''}</div>` : ''}</div>
       </div>
       <div class="field"><label>Notes</label><textarea class="textarea" id="p-notes" data-pbind="notes" rows="6" placeholder="Links, decisions, contacts, anything useful…">${esc(p.notes || '')}</textarea></div>
+      ${(() => { const tm = projectTime(p.id); return `<div class="field"><label>Time · ${fmtMins(tm.week)} this week · ${fmtMins(tm.total)} all time</label>
+        <div class="row wrap" style="gap:6px;margin-bottom:8px">${[15, 30, 60].map(m => `<button class="pill-btn soft" data-act="lt-add" data-pid="${p.id}" data-v="${m}">+${fmtMins(m)}</button>`).join('')}<button class="pill-btn" data-act="lt-open" data-pid="${p.id}">${icon('plus', 'sm')}Log time…</button></div>
+        ${timeHistoryHtml(p.id)}</div>`; })()}
       <div class="row wrap" style="justify-content:space-between">
         <div class="muted" style="font-size:13px">${icon('target', 'sm')} ${fmtMins(mins)} focused · Started ${fmtShort(dayKey(new Date(p.createdAt)))}</div>
         <button class="btn sm danger" data-act="p-delete">${icon('trash', 'sm')}Delete project</button></div>
@@ -1931,6 +2121,44 @@ const ACTIONS = {
     toast(`Break clock reset: next break in ${D.settings.breakInterval} min`, { ic: 'clock' });
   },
   'widgets-manage': () => { go('settings'); setTimeout(() => { const c = document.getElementById('set-widgets'); c && c.scrollIntoView({ behavior: 'smooth', block: 'center' }); c && c.classList.add('flash'); }, 450); },
+  'lt-add': (el) => { const pid = el.dataset.pid, m = +el.dataset.v; const e = logTime(pid, m); if (!e) return; refresh(); window.Sound && Sound.play('tick');
+    toast(`${fmtMins(m)} logged to ${(P.get(pid) || {}).name || 'General'}`, { ic: 'clock', action: { label: 'Undo', fn: () => { D.focusLog = D.focusLog.filter(x => x.id !== e.id); save(); refresh(); } } }); },
+  'lt-open': (el) => { state.logForm = { pid: el.dataset.pid }; if (state.modal) closeModalInstant(); openModal('logtime', el.dataset.pid); setTimeout(() => $('#lt-dur')?.focus(), 80); },
+  'lt-quick': (el) => { state.logForm = { ...(state.logForm || {}), mins: +el.dataset.v, text: '', date: $('#lt-date')?.value, note: $('#lt-note')?.value, taskId: $('#lt-task')?.value }; renderModal(false); const d = $('#lt-dur'); if (d) d.value = ''; },
+  'lt-save': () => {
+    const f = state.logForm || {}; const typed = parseDuration($('#lt-dur')?.value);
+    const mins = typed || f.mins;
+    if (!mins) { toast('How long? Pick a time or type one, e.g. 1h 20m', { ic: 'clock' }); $('#lt-dur')?.focus(); return; }
+    const pid = state.modal && state.modal.arg;
+    logTime(pid, mins, { date: $('#lt-date')?.value || today(), taskId: $('#lt-task')?.value || null, note: $('#lt-note')?.value || '' });
+    state.logForm = null; closeModal(); refresh();
+    toast(`${fmtMins(mins)} logged to ${(P.get(pid) || {}).name || 'General'}`, { ic: 'clock' });
+  },
+  'lt-del': (el) => { const snap = snapshot(); D.focusLog = D.focusLog.filter(x => x.id !== el.dataset.v); save(); refresh(); undoable('Time entry removed', snap, 'clock'); },
+  'week-csv': async () => {
+    const days = weekDays(state.weekOffset); const csv = timeCsv(days);
+    const name = `Hearth time ${days[0]} to ${days[6]}.csv`;
+    if (api.saveText) { const r = await api.saveText(name, csv); if (r) toast('Time saved as a spreadsheet', { ic: 'download' }); }
+    else { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = name; a.click(); }
+  },
+  'leave-add': () => {
+    const from = $('#lv-from')?.value, to = $('#lv-to')?.value || from, half = $('#lv-half')?.value || null, note = $('#lv-note')?.value || '';
+    if (!from) { toast('Pick the first day of your leave', { ic: 'calendar' }); return; }
+    const l = addLeave(from, to, half, note);
+    toast(`Leave booked: ${leaveLabel(l)} (${fmtDays(leaveDays(l))})`, { ic: 'sun' });
+  },
+  'leave-del': (el) => { const snap = snapshot(); D.leave = D.leave.filter(l => l.id !== el.dataset.v); save(); refresh(); undoable('Leave removed', snap, 'sun'); },
+  'leave-day': (el) => { const k = el.dataset.date; addLeave(k, k, el.dataset.half || null, ''); toast(`${fmtShort(k)} marked as annual leave`, { ic: 'sun' }); },
+  'leave-undo': (el) => { const k = el.dataset.date; const l = leaveOn(k); if (!l) return; const snap = snapshot();
+    if (l.start === l.end) D.leave = D.leave.filter(x => x !== l);
+    else if (k === l.start) l.start = addDays(k, 1);
+    else if (k === l.end) l.end = addDays(k, -1);
+    else { const tail = { ...l, id: uid(), start: addDays(k, 1) }; l.end = addDays(k, -1); D.leave.push(tail); }
+    save(); refresh(); undoable(`${fmtShort(k)} is a working day again`, snap, 'sun'); },
+  'bh-refresh': () => { refreshBankHolidays(true).then(ok => toast(ok ? 'Bank holidays updated from GOV.UK' : "Couldn't reach GOV.UK. Using the built-in list for now.", { ic: 'flag' })); },
+  'data-choose': async () => { if (!api.dataChoose) { toast('Choosing a folder works in the desktop app', { ic: 'folder' }); return; } const r = await api.dataChoose(); if (r && r.same) toast('Hearth is already using that folder', { ic: 'folder' }); },
+  'data-reset': async () => { if (api.dataReset) await api.dataReset(); },
+  'search-open': () => openSearch(),
   'widget-toggle': (el) => setWidget(el.dataset.v, !widgetOn(el.dataset.v)),
   'widget-move': (el) => moveWidget(el.dataset.v, +el.dataset.dir),
   'widget-page': (el) => { const p = D.settings.widgetPages = { ...(D.settings.widgetPages || {}) }; p[el.dataset.v] = p[el.dataset.v] === false; save(); refresh(); },
@@ -2206,6 +2434,8 @@ document.addEventListener('input', (e) => {
     D.settings[t.dataset.set] = v;
     save();
     if (t.dataset.set === 'volume' || t.dataset.set === 'ambientVolume') { Sound.applyVolumes(); return; }
+    if (t.dataset.set === 'bankRegion') { refresh(); refreshBankHolidays(true); return; }
+    if (t.dataset.set === 'leaveAllowance' || t.dataset.set === 'leaveYearStart') { clearTimeout(t._lv); t._lv = setTimeout(refresh, 600); return; }
     if (t.dataset.set === 'spellLang') { api.spellApply && api.spellApply({ spellcheck: D.settings.spellcheck, spellLang: v }); return; }
     if (t.dataset.set === 'dayStart' || t.dataset.set === 'dayEnd') return;
     if (t.dataset.set === 'name' && state.view === 'today') return;
@@ -2235,11 +2465,172 @@ document.addEventListener('contextmenu', (e) => {
     const id = Object.keys(WIDGETS).find(k => WIDGETS[k].k === card.dataset.k);
     if (id) { e.preventDefault(); widgetMenu(id, e.clientX, e.clientY); return; }
   }
+  const cc = e.target.closest && e.target.closest('.cal-cell[data-date], .tl-dh[data-date]');
+  if (cc) {
+    e.preventDefault();
+    const k = cc.dataset.date, off = dayOff(k), l = leaveOn(k);
+    const items = [{ header: parseKey(k).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }) }];
+    if (off && off.kind === 'bank') items.push({ label: off.title, ic: 'flag', disabled: true });
+    if (l) items.push({ label: 'Remove leave for this day', ic: 'x', fn: () => ACTIONS['leave-undo']({ dataset: { date: k } }) });
+    else if (!isWeekend(k)) items.push(
+      { label: 'Mark as annual leave', ic: 'sun', fn: () => ACTIONS['leave-day']({ dataset: { date: k } }) },
+      { label: 'Morning off (½ day)', ic: 'sun', fn: () => ACTIONS['leave-day']({ dataset: { date: k, half: 'am' } }) },
+      { label: 'Afternoon off (½ day)', ic: 'sun', fn: () => ACTIONS['leave-day']({ dataset: { date: k, half: 'pm' } }) });
+    items.push('-', { label: 'Book a longer break…', ic: 'calendar', fn: () => { go('settings'); setTimeout(() => { const c = $('#set-leave'); c && c.scrollIntoView({ behavior: 'smooth', block: 'center' }); const f = $('#lv-from'); if (f) f.value = k; c && c.classList.add('flash'); }, 450); } });
+    window.Notes.ctxMenu(items, e.clientX, e.clientY);
+    return;
+  }
   const b = e.target.closest && e.target.closest('.amb[data-v]');
   if (!b) return;
   e.preventDefault();
   soundMenu(b.dataset.v, e.clientX, e.clientY);
 });
+
+// ================================================================== SEARCH EVERYTHING (Ctrl+K)
+const stripHtml = (h) => String(h || '').replace(/<(br|\/p|\/div|\/li|\/h\d)[^>]*>/gi, ' ').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim();
+const SEARCH_KINDS = { all: 'All', task: 'Tasks', project: 'Projects', page: 'Notes', snippet: 'Snippets', other: 'More' };
+function searchIndex() {
+  const items = [];
+  const pname = (id) => (id && P.get(id) || {}).name || '';
+  const add = (o) => { o.hay = (o.title + ' ' + (o.body || '') + ' ' + (o.extra || '')).toLowerCase(); items.push(o); };
+  // pages and commands
+  Object.entries(NAV_ALL).forEach(([v, n]) => add({ kind: 'other', ic: n.ic, title: n.label, sub: 'Go to page', boost: 4, run: () => go(v) }));
+  [['New task', 'plus', 'add task create', () => { go('today'); setTimeout(() => $('#add-task')?.focus(), 350); }],
+   ['New project', 'folder', 'create', () => ACTIONS['project-new']()],
+   ['New notebook page', 'note', 'notes create', () => { const nb = (D.notebooks.find(n => n.kind === 'normal') || D.notebooks[0]); if (nb) window.Notes.actions['pg-new']({ dataset: { nb: nb.id } }); }],
+   ["Today's journal", 'calendar', 'diary', () => window.Notes.openJournal()],
+   ['Start a 25 min focus', 'target', 'pomodoro timer', () => startFocus(null, 25)],
+   ['Take a break now', 'coffee', 'screen break', () => ACTIONS['brk-now']()],
+   ['Reset the break clock', 'reset', 'timer', () => ACTIONS['brk-reset']()],
+   ['Morning brief', 'sunrise', 'brief', () => openModal('brief')],
+   ['Wrap up the day', 'moon', 'end of day', () => openModal('wrap')],
+   ['Book annual leave', 'sun', 'holiday leave a/l', () => { go('settings'); setTimeout(() => { const c = $('#set-leave'); c && c.scrollIntoView({ block: 'center' }); $('#lv-from')?.focus(); }, 450); }],
+   ['Weekly time report (CSV)', 'download', 'timesheet export', () => { go('week'); setTimeout(() => ACTIONS['week-csv'](), 400); }]
+  ].forEach(([t, ic, x, run]) => add({ kind: 'other', ic, title: t, sub: 'Action', extra: x, boost: 2, run }));
+  // settings sections
+  [['You & appearance', 'theme name season spell check dictionary'], ['Menu', 'sidebar compact'], ['Today widgets', 'widgets weather pinned ribbons deadlines'], ['Work hours', 'shift rotation week'], ['Holidays & leave', 'bank holiday annual leave allowance'],
+   ['Tasks & calendar', 'smart add reminders wrap'], ['Focus', 'soundscape shield'], ['Sounds', 'volume'], ['Screen breaks & wellbeing', 'water posture break'], ['Your data', 'backup export import folder onedrive']]
+    .forEach(([t, x]) => add({ kind: 'other', ic: 'sliders', title: t, sub: 'Settings', extra: x, run: () => { go('settings'); setTimeout(() => { const c = $$('.view .card').find(el => (el.querySelector('h3') || {}).textContent?.trim().toLowerCase().startsWith(t.toLowerCase())); if (c) { c.scrollIntoView({ behavior: 'smooth', block: 'start' }); c.classList.add('flash-any'); setTimeout(() => c.classList.remove('flash-any'), 1500); } }, 450); } }));
+  // tasks (open, plus done in the last 60 days)
+  const cutoff = Date.now() - 60 * 86400000;
+  D.tasks.filter(t => !t.done || (t.doneAt || 0) > cutoff).forEach(t => add({ kind: 'task', ic: t.done ? 'check' : 'circle', title: t.title, body: (t.notes || '') + ' ' + (t.subtasks || []).map(x => x.title).join(' '), extra: (t.tags || []).join(' ') + ' ' + pname(t.projectId),
+    sub: [t.done ? 'Done' : t.date ? relDay(t.date) : 'Backlog', pname(t.projectId)].filter(Boolean).join(' · '), done: t.done, boost: t.done ? -4 : t.date === today() ? 3 : 0, at: t.updatedAt || t.createdAt, run: () => openModal('task', t.id) }));
+  D.projects.forEach(p => add({ kind: 'project', ic: 'folder', color: p.color, title: p.name, body: (p.notes || '') + ' ' + (p.nextAction || ''), sub: `Project · ${p.status === 'active' ? (p.nextAction ? 'Next: ' + p.nextAction : 'Active') : p.status}`, boost: p.status === 'active' ? 3 : -2, at: p.updatedAt, run: () => openModal('project', p.id) }));
+  const nbs = new Map(D.notebooks.map(n => [n.id, n]));
+  D.notebooks.forEach(n => add({ kind: 'page', ic: 'book', color: n.color, title: n.name, sub: 'Notebook', boost: 1, run: () => window.Notes.open(n.id) }));
+  D.pages.forEach(pg => { const nb = nbs.get(pg.notebookId); if (!nb) return;
+    add({ kind: 'page', ic: pg.bookmarked ? 'ribbon' : 'note', color: nb.color, title: pg.title || (pg.date ? fmtLong(pg.date) : 'Untitled page'), body: stripHtml(pg.html) + ' ' + (pg.stickies || []).filter(x => !x.locked).map(x => x.text || '').join(' '), sub: nb.name, at: pg.updatedAt, page: pg, nb }); });
+  D.snippets.forEach(x => add({ kind: 'snippet', ic: x.kind === 'link' ? 'link' : 'code', title: x.title, body: x.content, extra: (x.tags || []).join(' '), sub: x.kind === 'link' ? 'Link · Enter opens it' : 'Snippet · Enter copies it', boost: x.pinned ? 2 : 0, at: x.usedAt || x.createdAt, snip: x }));
+  D.waiting.filter(w => !w.done).forEach(w => add({ kind: 'other', ic: 'hand', title: w.title, body: w.notes || '', extra: w.who || '', sub: `Waiting on${w.who ? ' ' + w.who : ''}`, run: () => go('waiting') }));
+  D.recurring.forEach(r => add({ kind: 'other', ic: 'repeat', title: r.title, body: r.notes || '', sub: `Routine · ${describeRule(r)}`, run: () => { state.recOpen.add(r.id); go('recurring'); refresh(); } }));
+  (D.leave || []).forEach(l => add({ kind: 'other', ic: 'sun', title: `Leave: ${leaveLabel(l)}`, body: l.note || '', extra: 'annual leave holiday', sub: 'Holidays & leave', run: () => ACTIONS['widgets-manage'] && go('settings') }));
+  return items;
+}
+function searchRank(items, q, kind) {
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const pool = kind === 'all' ? items : items.filter(i => i.kind === kind);
+  if (!words.length) {
+    // nothing typed: recent things and handy actions
+    const recent = pool.filter(i => i.at && i.kind !== 'other' && !i.done).sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 8);
+    const acts = kind === 'all' || kind === 'other' ? pool.filter(i => i.sub === 'Action').slice(0, 6) : [];
+    return [...recent.map(i => ({ i, sc: 0, grp: 'Recent' })), ...acts.map(i => ({ i, sc: 0, grp: 'Actions' }))];
+  }
+  const out = [];
+  for (const i of pool) {
+    const t = i.title.toLowerCase(); let sc = 0, ok = true, inBody = false;
+    for (const w of words) {
+      const ti = t.indexOf(w);
+      if (ti === 0) sc += 30; else if (ti > 0) sc += /[\s\-_/(:.]/.test(t[ti - 1]) ? 20 : 10;
+      else if (i.hay.includes(w)) { sc += 4; inBody = true; } else { ok = false; break; }
+    }
+    if (!ok) continue;
+    if (t === q.toLowerCase()) sc += 25;
+    sc += (i.boost || 0) + (i.at ? Math.max(0, 6 - (Date.now() - i.at) / (86400000 * 5)) : 0);
+    out.push({ i, sc, inBody });
+  }
+  out.sort((a, b) => b.sc - a.sc);
+  return out.slice(0, 50).map(r => ({ ...r, grp: SEARCH_KINDS[r.i.kind] }));
+}
+function hiText(text, words) {
+  let h = esc(text);
+  words.filter(w => w.length > 1).forEach(w => { h = h.replace(new RegExp('(' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/&/g, '&amp;') + ')', 'gi'), '<mark>$1</mark>'); });
+  return h;
+}
+function excerpt(body, words) {
+  const b = String(body || ''), lb = b.toLowerCase();
+  const w = words.find(x => lb.includes(x)); if (!w) return '';
+  const i = lb.indexOf(w), a = Math.max(0, i - 40), z = Math.min(b.length, i + w.length + 70);
+  return (a ? '…' : '') + b.slice(a, z).trim() + (z < b.length ? '…' : '');
+}
+let pal = null;
+function openSearch() {
+  if (IS_CAPTURE) return;
+  if (pal) { pal.input.focus(); pal.input.select(); return; }
+  const wrap = document.createElement('div'); wrap.className = 'pal-wrap';
+  wrap.innerHTML = `<div class="scrim pal-scrim"></div><div class="palette" role="dialog" aria-label="Search everything">
+    <div class="pal-top">${icon('search')}<input class="pal-input" placeholder="Search tasks, projects, notes, snippets… or type a command" autocomplete="off" spellcheck="false"><kbd>Esc</kbd></div>
+    <div class="pal-kinds">${Object.entries(SEARCH_KINDS).map(([k, l]) => `<button data-kind="${k}" class="${k === 'all' ? 'on' : ''}">${l}</button>`).join('')}<span class="pal-tip">Tab switches</span></div>
+    <div class="pal-list" role="listbox"></div>
+    <div class="pal-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>Ctrl</kbd>+<kbd>Enter</kbd> open snippet page</span></div></div>`;
+  document.body.appendChild(wrap);
+  const input = wrap.querySelector('.pal-input'), list = wrap.querySelector('.pal-list');
+  pal = { wrap, input, list, items: searchIndex(), kind: 'all', sel: 0, rows: [] };
+  const draw = () => {
+    const q = input.value.trim(), words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    pal.rows = searchRank(pal.items, q, pal.kind);
+    pal.sel = Math.min(pal.sel, Math.max(0, pal.rows.length - 1));
+    let last = '';
+    list.innerHTML = pal.rows.length ? pal.rows.map((r, n) => {
+      const i = r.i; const head = r.grp !== last ? `<div class="pal-grp">${esc(r.grp)}</div>` : ''; last = r.grp;
+      const ex = q && r.inBody ? excerpt(i.kind === 'page' || i.kind === 'snippet' || i.kind === 'task' || i.kind === 'project' ? i.body : '', words) : '';
+      return `${head}<button class="pal-row ${n === pal.sel ? 'on' : ''} ${i.done ? 'done' : ''}" data-n="${n}" role="option">
+        <span class="pal-ic" ${i.color ? `style="--c:${i.color}"` : ''}>${icon(i.ic, 'sm')}</span>
+        <span class="pal-main"><span class="pal-t">${hiText(i.title, words)}</span>${ex ? `<span class="pal-ex">${hiText(ex, words)}</span>` : ''}</span>
+        <span class="pal-sub">${esc(i.sub || '')}</span></button>`;
+    }).join('') : `<div class="pal-empty">${icon('search')}<b>No matches</b><span>Try fewer words, or another tab.</span></div>`;
+    const on = list.querySelector('.pal-row.on'); if (on) on.scrollIntoView({ block: 'nearest' });
+  };
+  const close = () => { if (!pal) return; const w = pal.wrap; pal = null; w.classList.add('out'); setTimeout(() => w.remove(), 180); };
+  const runRow = (n, alt) => {
+    const r = pal && pal.rows[n]; if (!r) return;
+    const i = r.i, q = input.value.trim();
+    close();
+    if (state.modal) closeModalInstant();
+    if (i.snip) {
+      if (alt) { go('snippets'); return; }
+      if (i.snip.kind === 'link') ACTIONS['snip-open'](null, i.snip.id);
+      else { api.copy(i.snip.content); i.snip.usedAt = Date.now(); save(); toast(`Copied "${i.snip.title}"`, { ic: 'copy' }); }
+      return;
+    }
+    if (i.page) { window.Notes.openFind ? window.Notes.openFind(i.nb.id, i.page.id, q) : window.Notes.open(i.nb.id, i.page.id); return; }
+    i.run && i.run();
+  };
+  pal.draw = draw;
+  input.addEventListener('input', () => { pal.sel = 0; draw(); });
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Escape') { e.preventDefault(); close(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); pal.sel = Math.min(pal.rows.length - 1, pal.sel + 1); draw(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); pal.sel = Math.max(0, pal.sel - 1); draw(); }
+    else if (e.key === 'Enter') { e.preventDefault(); runRow(pal.sel, e.ctrlKey); }
+    else if (e.key === 'Tab') {
+      e.preventDefault(); const ks = Object.keys(SEARCH_KINDS); pal.kind = ks[(ks.indexOf(pal.kind) + (e.shiftKey ? ks.length - 1 : 1)) % ks.length];
+      wrap.querySelectorAll('.pal-kinds button').forEach(b => b.classList.toggle('on', b.dataset.kind === pal.kind)); pal.sel = 0; draw();
+    }
+  });
+  wrap.addEventListener('mousedown', (e) => {
+    if (e.target.classList.contains('pal-scrim')) { close(); return; }
+    const k = e.target.closest('.pal-kinds button');
+    if (k) { e.preventDefault(); pal.kind = k.dataset.kind; wrap.querySelectorAll('.pal-kinds button').forEach(b => b.classList.toggle('on', b === k)); pal.sel = 0; draw(); input.focus(); return; }
+    const row = e.target.closest('.pal-row'); if (row) { e.preventDefault(); runRow(+row.dataset.n, e.ctrlKey); }
+  });
+  wrap.addEventListener('mousemove', (e) => { const row = e.target.closest('.pal-row'); if (row && +row.dataset.n !== pal.sel) { pal.sel = +row.dataset.n; list.querySelectorAll('.pal-row').forEach(r => r.classList.toggle('on', +r.dataset.n === pal.sel)); } });
+  draw();
+  setTimeout(() => input.focus(), 10);
+}
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); e.stopPropagation(); openSearch(); }
+}, true);
 
 // ================================================================== SPELLING / EDIT MENU
 // right-click in any text box: spelling suggestions (when the word is underlined) plus cut, copy and paste
@@ -2265,7 +2656,7 @@ function spellMenu(p) {
 
 // ================================================================== DAY / WRAP WATCHERS
 function maybeMorning() {
-  if (D.meta.lastBriefDate === today()) return;
+  if (D.meta.lastBriefDate === today() || dayOffFull(today())) return;
   D.meta.lastBriefDate = today(); save();
   const anything = T.overdue().length || T.today().length || W.dueList().length || P.stale().length || D.tasks.length;
   if (anything) setTimeout(() => { if (!state.modal && !state.breakOpen) openModal('brief'); }, 650);
@@ -2277,7 +2668,7 @@ function checkDay() {
     refresh();
     maybeMorning();
   }
-  if (pastWrapTime() && !(D.dayLog[today()] || {}).wrapped && D.meta.wrapPrompted !== today() && !state.breakOpen) {
+  if (pastWrapTime() && !dayOffFull(today()) && !(D.dayLog[today()] || {}).wrapped && D.meta.wrapPrompted !== today() && !state.breakOpen) {
     const open = T.today().length;
     if (open || T.doneOn(today()).length) {
       D.meta.wrapPrompted = today(); save();
@@ -2389,6 +2780,7 @@ window.H = {
   get D() { return D; }, state, api, save, flush, refresh, toast, undoable, snapshot, restore,
   esc, icon, uid, dayKey, today, tomorrow, parseKey, addDays, fmtLong, fmtShort, relDay, relLow, plural, daysSince,
   newTask, T, P, touchProject, addTask, toggleTask, openModal, closeModal, closeModalInstant: () => closeModalInstant(), go, animateOut,
+  dayOff, isWorkingDay, leaveOn,
   updateSidebar, REDUCED, EASE, IS_CAPTURE,
   ruleMatches, describeRule, taskRow, flipRender, refreshQuiet, startFocus, renderView,
   spellMenu: (p) => spellMenu(p),
@@ -2417,6 +2809,12 @@ async function boot() {
     if (!s.due && state.breakOpen && s.reason === 'back') closeBreak();
   });
   if (api.onSpellMenu) api.onSpellMenu(spellMenu);
+  setTimeout(() => refreshBankHolidays(false), 4000);
+  if (api.onDataExternal) api.onDataExternal(async (p) => {
+    if (p && p.kept === 'theirs') { D = normalise(await api.getData()); refresh(); window.Notes.external && window.Notes.external(); toast('Updated with changes from your other PC', { ic: 'reset' }); }
+    else toast('Your other PC changed the data while you were editing here. Your version was kept and theirs saved beside it.', { ic: 'folder', timeout: 10000 });
+  });
+  if (api.dataOtherPc) setTimeout(() => api.dataOtherPc().then(h => { if (h) toast(`Hearth also looks open on ${h}. Edits on both at once can overwrite each other.`, { ic: 'folder', timeout: 12000 }); }), 2500);
   if (api.onStreamState) api.onStreamState(() => setTimeout(() => { if (state.view === 'today') refreshQuiet(); }, 50));
   api.onBreakDue((s) => {
     setBreakStatus(s);

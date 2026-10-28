@@ -11,11 +11,11 @@ Grab the latest files from the **Releases** page on GitHub. Every push to `main`
 
 ### Building it yourself
 
-**Make the installer once:** double-click **`Make-Installer.bat`**. You don't need to install anything first. If Node.js isn't on the PC, the script downloads a private copy into a `.tools` folder, used only for building. After a few minutes it opens `dist\` with **`Hearth-Setup-1.7.1.exe`**.
+**Make the installer once:** double-click **`Make-Installer.bat`**. You don't need to install anything first. If Node.js isn't on the PC, the script downloads a private copy into a `.tools` folder, used only for building. After a few minutes it opens `dist\` with **`Hearth-Setup-1.8.0.exe`**.
 
-**Install:** double-click `Hearth-Setup-1.7.1.exe`. A setup wizard lets you choose just-me or all users and the install folder. It creates Start menu and desktop shortcuts, launches Hearth when it finishes, and adds an uninstaller in Windows *Apps*.
+**Install:** double-click `Hearth-Setup-1.8.0.exe`. A setup wizard lets you choose just-me or all users and the install folder. It creates Start menu and desktop shortcuts, launches Hearth when it finishes, and adds an uninstaller in Windows *Apps*.
 
-- **Silent install** (e.g. NinjaOne): `Hearth-Setup-1.7.1.exe /S`. Add `/allusers` for a machine-wide install.
+- **Silent install** (e.g. NinjaOne): `Hearth-Setup-1.8.0.exe /S`. Add `/allusers` for a machine-wide install.
 - The installer isn't code-signed, so Windows SmartScreen may say "Windows protected your PC" the first time. Click **More info → Run anyway**. Silent installs aren't affected.
 - Optional: if this folder is pushed to GitHub, `.github/workflows/build-installer.yml` builds the installer automatically on every push.
 - `run-dev.bat` runs Hearth straight from the source folder, for trying changes.
@@ -25,6 +25,12 @@ Your data is kept when you install a newer version over the top.
 ## What's in it
 
 **Today**: daily tasks with **Tomorrow →** buttons and *Move all to tomorrow*. *Carried over* holds yesterday's leftovers. Click any task for its details. Drag the ⋮⋮ handle to reorder, drop onto *Tomorrow*, or drop onto a project in the side panel.
+
+**Search everything**: press **Ctrl+K** anywhere (or click *Search* at the top of the menu). One box finds tasks, projects, notebook pages (including the text inside them and stickies), snippets, waiting-on items, routines, settings and handy actions. **Tab** switches between All / Tasks / Projects / Notes / Snippets. Enter opens it: a snippet is copied straight away, and a note opens with your words highlighted.
+
+**Holidays & leave** (Settings): UK bank holidays come from GOV.UK (England & Wales, Scotland or Northern Ireland), with a built-in list if you're offline. Book annual leave (full or half days, with a note) in Settings, or right-click a day on the Calendar. Set your yearly allowance to see days booked and left; weekends and bank holidays aren't counted. Days off show on the calendar, pause weekday/weekly routines, keep your streak safe, skip the morning brief and wrap-up, and show in *Time left today*. "First/last working day" routines skip bank holidays.
+
+**Time per project**: focus sessions count automatically, and you can log other time (meetings, calls) with **+15m / +30m / +1h / Log…** on an expanded project or in its details, where the history is too. *Weekly review → Time by project* splits focus and hand-logged time, and **CSV** saves the week for timesheets.
 
 **Smart quick-add**: type naturally, e.g. `Chase Dell fri 2pm #vendors !1 @win11`. A live preview shows what Hearth understood. It knows *today, tomorrow, tonight, mon–fri, next tue, in 3 days, 25/11, 3rd dec, 2pm, 14:30, at 9*, plus `#labels`, `!1`–`!3` priority and `@project`.
 
@@ -80,7 +86,11 @@ Your data is kept when you install a newer version over the top.
 
 ## Your data
 
-Stored locally in `%APPDATA%\Hearth\hearth-data.json`. A dated backup is kept each day (the last 14), and pasted images are saved in `%APPDATA%\Hearth\images`. Settings → *Export / Import* gives you manual backups.
+By default it's stored in `%APPDATA%\Hearth\hearth-data.json`, with pictures and videos in folders beside it and a dated backup each day (the last 14).
+
+**Choose where it lives**: Settings → *Your data* → **Change folder…** lets you pick any folder, e.g. **OneDrive**. Hearth makes a `Hearth` folder there and moves your data, pictures and backups into it. You get a cloud backup and the same data on another PC (install Hearth there and point it at the same folder). If the folder already holds Hearth data, you choose whether to use it or replace it. *Use this PC only* moves it back.
+- Best used on one PC at a time. Hearth warns you if it looks open on another PC, picks up changes made elsewhere automatically, and if both change at once it keeps yours and saves the other version beside it.
+- Settings → *Export / Import* still gives you manual backups.
 
 ## Project layout
 

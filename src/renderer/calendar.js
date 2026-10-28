@@ -96,8 +96,9 @@ function monthHtml() {
     const max = 3;
     const shown = items.slice(0, max).join('');
     const more = items.length - max;
-    cells.push(`<div class="cal-cell ${d.getMonth() !== a.getMonth() ? 'out' : ''} ${k === today ? 'today' : ''} ${k === cal.selected ? 'sel' : ''} ${k < today ? 'past' : ''} ${[0, 6].includes(d.getDay()) ? 'wkend' : ''}" data-drop-date="${k}" data-act="cal-select" data-date="${k}">
-      <div class="cal-num"><span>${d.getDate()}</span>${jr ? `<i class="jr-dot" title="Journal page"></i>` : ''}</div>
+    const off = H().dayOff ? H().dayOff(k) : null;
+    cells.push(`<div class="cal-cell ${off ? 'off-' + off.kind : ''} ${d.getMonth() !== a.getMonth() ? 'out' : ''} ${k === today ? 'today' : ''} ${k === cal.selected ? 'sel' : ''} ${k < today ? 'past' : ''} ${[0, 6].includes(d.getDay()) ? 'wkend' : ''}" data-drop-date="${k}" data-act="cal-select" data-date="${k}">
+      <div class="cal-num"><span>${d.getDate()}</span>${jr ? `<i class="jr-dot" title="Journal page"></i>` : ''}${off ? `<em class="cal-off" title="${esc(off.title)}">${icon(off.kind === 'bank' ? 'flag' : 'sun', 'sm')}${esc(off.kind === 'bank' ? off.title : off.half ? '½ day leave' : 'Leave')}</em>` : ''}</div>
       <div class="cal-items">${shown}${more > 0 ? `<div class="cal-more">+${more} more</div>` : ''}</div>
     </div>`);
   }
@@ -117,6 +118,10 @@ function dayPanel(k) {
       <button class="btn sm ghost" data-act="cal-dayview" data-date="${k}" title="Open day timeline">${icon('clock', 'sm')}Timeline</button></div>
     <div class="add-bar cal-add">${icon('plus', 'sm')}<input id="cal-add" placeholder="Add for ${esc(k === H().today() ? 'today' : H().fmtShort(k))}… e.g. Call Sam 2pm" autocomplete="off" maxlength="300" data-date="${k}"></div>
     <div class="add-preview" id="cal-add-preview"></div>
+    ${(() => { const off = H().dayOff ? H().dayOff(k) : null; const wkend = [0, 6].includes(H().parseKey(k).getDay());
+      if (off && off.kind === 'bank') return `<div class="off-line bank">${icon('flag', 'sm')}<span class="grow"><b>Bank holiday</b> · ${esc(off.title)}</span></div>`;
+      if (off) return `<div class="off-line leave">${icon('sun', 'sm')}<span class="grow"><b>${off.half ? `Half day: ${off.half === 'am' ? 'morning' : 'afternoon'} off` : 'Annual leave'}</b>${off.leave.note ? ' · ' + esc(off.leave.note) : ''}</span><button class="link" data-act="leave-undo" data-date="${k}">Remove</button></div>`;
+      return wkend ? '' : `<div class="off-line add"><span class="grow muted">${icon('sun', 'sm')} Off this day?</span><button class="link" data-act="leave-day" data-date="${k}">Annual leave</button><button class="link" data-act="leave-day" data-date="${k}" data-half="am">½ am</button><button class="link" data-act="leave-day" data-date="${k}" data-half="pm">½ pm</button></div>`; })()}
     ${due.map(p => `<div class="mini-item due-line" data-act="project-open" data-pid="${p.id}"><span class="chip" style="color:${p.color}">${icon('flag')}</span><span class="grow"><b>${esc(p.name)}</b> is due</span></div>`).join('')}
     <div class="list" data-drop-list="${k}">${open.map(t => H().taskRow(t, { ctx: 'cal' })).join('')}</div>
     ${!open.length && !due.length ? `<div class="muted cal-empty">${k < H().today() ? 'Nothing was planned.' : 'Nothing planned yet. Add something, or drag a task onto any day.'}</div>` : ''}
